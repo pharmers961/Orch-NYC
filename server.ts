@@ -209,9 +209,11 @@ function extractJsonLdEvents(html: string, sourceUrl: string): any[] {
     if (node.startDate) {
       const dt = new Date(node.startDate);
       if (!isNaN(dt.getTime())) {
-        date = dt.toISOString().split("T")[0];
-        const tMatch = String(node.startDate).match(/T(\d{2}:\d{2})/);
-        time = tMatch ? tMatch[1] : dt.toISOString().split("T")[1].slice(0, 5);
+        // Use a consistent UTC instant for both date and time so the client
+        // (which stores `${date}T${time}:00Z`) reconstructs the correct moment.
+        const iso = dt.toISOString();
+        date = iso.split("T")[0];
+        time = iso.split("T")[1].slice(0, 5);
       }
     }
 

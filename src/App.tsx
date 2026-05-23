@@ -105,6 +105,27 @@ export function hostOf(url: string): string {
   return safeGetHostname(url, url);
 }
 
+export const NYC_BOROUGHS = ["Manhattan", "Brooklyn", "Queens", "Bronx", "Staten Island"];
+
+// Map an event's area/venue text to one of the five boroughs (best-effort).
+export function getBorough(area: string, venue: string): string {
+  const hay = `${area || ""} ${venue || ""}`.toLowerCase();
+  if (/staten/.test(hay)) return "Staten Island";
+  if (/(bronx|yankee)/.test(hay)) return "Bronx";
+  if (/(brooklyn|williamsburg|bushwick|dumbo|barclays|\bbam\b|prospect|greenpoint|coney)/.test(hay)) return "Brooklyn";
+  if (/(queens|astoria|flushing|citi field|forest hills|long island city|\blic\b)/.test(hay)) return "Queens";
+  if (/(manhattan|midtown|upper west|upper east|harlem|village|soho|tribeca|chelsea|lincoln center|carnegie|madison square|radio city|times square|downtown)/.test(hay)) return "Manhattan";
+  return "Other";
+}
+
+// Local-timezone YYYY-MM-DD key so calendar cells match what the list view shows.
+export function localDateKey(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
 // A curated starter pack of NYC venue / listing sources for one-click adding.
 export const NYC_STARTER_SOURCES: { url: string; label: string; emoji: string }[] = [
   { url: "https://www.wnyc.org/events/", label: "WNYC Greene Space", emoji: "📻" },
@@ -267,11 +288,17 @@ export default function App() {
   const [googleEventsSuccessNote, setGoogleEventsSuccessNote] = useState<string | null>(null);
   const [dateFilter, setDateFilter] = useState<"all" | "today" | "weekend" | "week" | "month">("all");
   const [searchQuery, setSearchQuery] = useState("");
-  const [viewMode, setViewMode] = useState<"list" | "calendar">("list");
+  const [viewMode, setViewMode] = useState<"list" | "calendar" | "plan">("list");
+  const [calendarView, setCalendarView] = useState<"month" | "week" | "agenda">("month");
   const [calendarYear, setCalendarYear] = useState(() => new Date().getFullYear());
   const [calendarMonth, setCalendarMonth] = useState(() => new Date().getMonth()); // 0-indexed
-  const [sortBy, setSortBy] = useState<"soonest" | "lowestPrice" | "recentlyAdded">("soonest");
+  const [weekRef, setWeekRef] = useState(() => new Date()); // reference date for week view
+  const [sortBy, setSortBy] = useState<"soonest" | "lowestPrice" | "recentlyAdded" | "endingSoon">("soonest");
   const [savedOnly, setSavedOnly] = useState(false);
+  // Discovery filters
+  const [selectedBoroughs, setSelectedBoroughs] = useState<string[]>([]);
+  const [maxPrice, setMaxPrice] = useState<number>(0); // 0 = no cap
+  const [freeOnly, setFreeOnly] = useState(false);
 
   // Status/Uis
   const [loading, setLoading] = useState(false);
@@ -437,6 +464,49 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem("marquee_source_status", JSON.stringify(sourceStatus));
   }, [sourceStatus]);
+
+  // Escape closes whichever overlay is open (accessibility).
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      if (selectedEventId) setSelectedEventId(null);
+      else if (addEventOpen) setAddEventOpen(false);
+      else if (dayAgendaKey) setDayAgendaKey(null);
+      else if (settingsOpen) setSettingsOpen(false);
+      else if (sidebarOpen) setSidebarOpen(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [selectedEventId, addEventOpen, dayAgendaKey, settingsOpen, sidebarOpen]);
+
+  // Persist primary view state to the URL so it survives reload and is shareable.
+  useEffect(() => {
+    const params = new URLSearchParams();
+    if (viewMode !== "list") params.set("view", viewMode);
+    if (sortBy !== "soonest") params.set("sort", sortBy);
+    if (dateFilter !== "all") params.set("when", dateFilter);
+    if (savedOnly) params.set("saved", "1");
+    if (searchQuery.trim()) params.set("q", searchQuery.trim());
+    if (selectedBoroughs.length) params.set("boroughs", selectedBoroughs.join(","));
+    const qs = params.toString();
+    window.history.replaceState(null, "", qs ? `?${qs}` : window.location.pathname);
+  }, [viewMode, sortBy, dateFilter, savedOnly, searchQuery, selectedBoroughs]);
+
+  // Read view state from the URL once on mount.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const v = params.get("view");
+    if (v === "calendar" || v === "plan" || v === "list") setViewMode(v);
+    const s = params.get("sort");
+    if (s === "endingSoon" || s === "lowestPrice" || s === "recentlyAdded" || s === "soonest") setSortBy(s);
+    const w = params.get("when");
+    if (w === "today" || w === "weekend" || w === "week" || w === "month" || w === "all") setDateFilter(w);
+    if (params.get("saved") === "1") setSavedOnly(true);
+    const q = params.get("q");
+    if (q) setSearchQuery(q);
+    const b = params.get("boroughs");
+    if (b) setSelectedBoroughs(b.split(",").filter(Boolean));
+  }, []);
 
   // Handle auto-refresh interval (5 minutes)
   useEffect(() => {
@@ -1011,6 +1081,17 @@ export default function App() {
         // Venues Filter
         if (selectedVenues.length > 0 && !selectedVenues.includes(e.venue)) return false;
 
+        // Borough Filter
+        if (selectedBoroughs.length > 0 && !selectedBoroughs.includes(getBorough(e.area, e.venue))) return false;
+
+        // Price Filters
+        const isFree = /free/i.test(e.price) || parseLowestNumericPrice(e.price) === 0;
+        if (freeOnly && !isFree) return false;
+        if (maxPrice > 0) {
+          const low = parseLowestNumericPrice(e.price);
+          if (low !== 99999 && low > maxPrice) return false;
+        }
+
         // Saved Filter
         if (savedOnly && !savedIds.includes(e.id)) return false;
 
@@ -1030,8 +1111,8 @@ export default function App() {
           if (!matchTitle && !matchArtist && !matchVenue && !matchDesc) return false;
         }
 
-        // Date Period Filter (only applied in non-calendar view)
-        if (viewMode !== "calendar") {
+        // Date Period Filter (only applied in list/plan view, not the calendar grid)
+        if (viewMode === "list" || viewMode === "plan") {
           const evDate = new Date(e.start);
           const today = new Date();
           today.setHours(0, 0, 0, 0);
@@ -1082,9 +1163,18 @@ export default function App() {
           const priceB = parseLowestNumericPrice(b.price);
           return priceA - priceB;
         }
+        if (sortBy === "endingSoon") {
+          // Soonest upcoming first, treating past as far away
+          const now = Date.now();
+          const ta = new Date(a.start).getTime();
+          const tb = new Date(b.start).getTime();
+          const da = ta < now ? Infinity : ta;
+          const db = tb < now ? Infinity : tb;
+          return da - db;
+        }
         return 0;
       });
-  }, [events, selectedCategories, selectedSources, selectedVenues, savedOnly, savedIds, searchQuery, dateFilter, sortBy, selectedTags, viewMode]);
+  }, [events, selectedCategories, selectedSources, selectedVenues, selectedBoroughs, maxPrice, freeOnly, savedOnly, savedIds, searchQuery, dateFilter, sortBy, selectedTags, viewMode]);
 
   function parseLowestNumericPrice(priceStr: string): number {
     if (priceStr.toLowerCase().includes("tba") || priceStr.toLowerCase().includes("free")) return 0;
@@ -1266,6 +1356,11 @@ export default function App() {
       `SUMMARY:${ev.title}`,
       `DESCRIPTION:${(ev.desc || "Live nyc performance").replace(/\n/g, "\\n")} \\n\\nTicket Booking: ${ev.ticketUrl}`,
       `LOCATION:${ev.venue}, ${ev.area}`,
+      "BEGIN:VALARM",
+      "TRIGGER:-PT1H",
+      "ACTION:DISPLAY",
+      `DESCRIPTION:Reminder: ${ev.title}`,
+      "END:VALARM",
       "END:VEVENT",
       "END:VCALENDAR",
     ].join("\r\n");
@@ -1315,12 +1410,12 @@ export default function App() {
       calendarCells.push({ dateNum: null, events: [], isToday: false });
     }
 
-    // Populate actual days
+    // Populate actual days (match on LOCAL date so events land on the day shown in the list view)
     for (let d = 1; d <= daysInMonth; d++) {
-      const matchedEvents = filteredEventsList.filter((e) => {
-        const matchDateStr = `${year}-${String(month + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
-        return e.start.startsWith(matchDateStr);
-      });
+      const cellKey = localDateKey(new Date(year, month, d));
+      const matchedEvents = filteredEventsList
+        .filter((e) => localDateKey(new Date(e.start)) === cellKey)
+        .sort((a, b) => new Date(a.start).getTime() - new Date(b.start).getTime());
 
       calendarCells.push({
         dateNum: d,
@@ -1333,11 +1428,119 @@ export default function App() {
     return { monthLabel, cells: calendarCells };
   }, [filteredEventsList, calendarYear, calendarMonth]);
 
+  // Index filtered events by local date key (for the day-agenda popover & week view).
+  const eventsByLocalDate = useMemo(() => {
+    const map: Record<string, EventItem[]> = {};
+    filteredEventsList.forEach((e) => {
+      const key = localDateKey(new Date(e.start));
+      (map[key] = map[key] || []).push(e);
+    });
+    Object.values(map).forEach((list) => list.sort((a, b) => new Date(a.start).getTime() - new Date(b.start).getTime()));
+    return map;
+  }, [filteredEventsList]);
+
+  // Week view: 7 days starting Sunday of the week containing weekRef.
+  const weekData = useMemo(() => {
+    const start = new Date(weekRef);
+    start.setHours(0, 0, 0, 0);
+    start.setDate(start.getDate() - start.getDay());
+    const days = Array.from({ length: 7 }, (_, i) => {
+      const d = new Date(start);
+      d.setDate(start.getDate() + i);
+      const key = localDateKey(d);
+      return { date: d, key, events: eventsByLocalDate[key] || [], isToday: key === localDateKey(new Date()) };
+    });
+    const end = new Date(start);
+    end.setDate(start.getDate() + 6);
+    const label = `${start.toLocaleDateString("en-US", { month: "short", day: "numeric" })} – ${end.toLocaleDateString("en-US", { month: "short", day: "numeric" })}`;
+    return { days, label };
+  }, [weekRef, eventsByLocalDate]);
+
+  // Agenda view: upcoming events grouped by local date.
+  const agendaGroups = useMemo(() => {
+    const groups: { key: string; date: Date; events: EventItem[] }[] = [];
+    const sorted = [...filteredEventsList].sort((a, b) => new Date(a.start).getTime() - new Date(b.start).getTime());
+    const byKey: Record<string, EventItem[]> = {};
+    sorted.forEach((e) => {
+      const key = localDateKey(new Date(e.start));
+      (byKey[key] = byKey[key] || []).push(e);
+    });
+    Object.keys(byKey).sort().forEach((key) => {
+      groups.push({ key, date: new Date(`${key}T12:00:00`), events: byKey[key] });
+    });
+    return groups;
+  }, [filteredEventsList]);
+
+  // Build a multi-event .ics file and download it (bulk calendar export).
+  const downloadMultiICS = (list: EventItem[], filename: string) => {
+    if (list.length === 0) {
+      setErrorMessage("No events to export with the current filters.");
+      return;
+    }
+    const fmt = (d: Date) => d.toISOString().replace(/-|:|\.\d\d\d/g, "");
+    const vevents = list.map((ev) => {
+      const start = new Date(ev.start);
+      const end = new Date(start.getTime() + 2.5 * 60 * 60 * 1000);
+      return [
+        "BEGIN:VEVENT",
+        `UID:${ev.id}@orch.live`,
+        `DTSTART:${fmt(start)}`,
+        `DTEND:${fmt(end)}`,
+        `SUMMARY:${ev.title.replace(/\n/g, " ")}`,
+        `DESCRIPTION:${(ev.desc || "Live NYC event").replace(/\n/g, "\\n")} \\n\\nTickets: ${ev.ticketUrl}`,
+        `LOCATION:${ev.venue}, ${ev.area}`,
+        "BEGIN:VALARM",
+        "TRIGGER:-PT1H",
+        "ACTION:DISPLAY",
+        `DESCRIPTION:Reminder: ${ev.title.replace(/\n/g, " ")}`,
+        "END:VALARM",
+        "END:VEVENT",
+      ].join("\r\n");
+    });
+    const ics = ["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//Orch NYC//EN", ...vevents, "END:VCALENDAR"].join("\r\n");
+    const blob = new Blob([ics], { type: "text/calendar;charset=utf-8" });
+    const link = document.createElement("a");
+    link.href = URL.createObjectURL(blob);
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    setApiSuccessNote(`Exported ${list.length} event(s) to ${filename}.`);
+  };
+
   // Trap focus inside modal on launch
   const activeEvent = useMemo(() => {
     if (!selectedEventId) return null;
     return events.find((e) => e.id === selectedEventId) || null;
   }, [selectedEventId, events]);
+
+  // Saved events as a chronological itinerary ("My Plan"), grouped by date with overlap detection.
+  const planGroups = useMemo(() => {
+    const saved = events
+      .filter((e) => savedIds.includes(e.id))
+      .sort((a, b) => new Date(a.start).getTime() - new Date(b.start).getTime());
+    const byKey: Record<string, EventItem[]> = {};
+    saved.forEach((e) => {
+      const key = localDateKey(new Date(e.start));
+      (byKey[key] = byKey[key] || []).push(e);
+    });
+    return Object.keys(byKey).sort().map((key) => {
+      const list = byKey[key];
+      // Mark overlaps (events within 2.5h windows of each other on the same day)
+      const overlaps = new Set<string>();
+      for (let i = 0; i < list.length; i++) {
+        for (let j = i + 1; j < list.length; j++) {
+          const s1 = new Date(list[i].start).getTime();
+          const s2 = new Date(list[j].start).getTime();
+          if (Math.abs(s1 - s2) < 2.5 * 60 * 60 * 1000) {
+            overlaps.add(list[i].id);
+            overlaps.add(list[j].id);
+          }
+        }
+      }
+      return { key, date: new Date(`${key}T12:00:00`), events: list, overlaps };
+    });
+  }, [events, savedIds]);
 
   return (
     <div className="min-h-screen bg-slate-50 dark:bg-[#000000] text-slate-900 dark:text-zinc-100 transition-colors duration-300 flex flex-col antialiased">
@@ -1628,11 +1831,21 @@ export default function App() {
               className="px-3 py-1.5 rounded-full border border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-950 text-xs text-slate-700 dark:text-zinc-300 focus:outline-none"
             >
               <option value="soonest">Soonest</option>
+              <option value="endingSoon">Ending soon</option>
               <option value="lowestPrice">Lowest price</option>
               <option value="recentlyAdded">Recently added</option>
             </select>
 
-            {/* List / Calendar toggle */}
+            {/* Bulk export to calendar */}
+            <button
+              onClick={() => downloadMultiICS(filteredEventsList, "orch-nyc-events.ics")}
+              className="p-1.5 rounded-full border border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-950 text-slate-600 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-900 transition-all"
+              title="Export all visible events to your calendar (.ics)"
+            >
+              <CalendarPlus size={14} />
+            </button>
+
+            {/* List / Calendar / Plan toggle */}
             <div className="flex items-center rounded-lg border border-slate-200 dark:border-zinc-800 p-0.5 bg-slate-100 dark:bg-zinc-900">
               <button
                 onClick={() => setViewMode("list")}
@@ -1640,6 +1853,7 @@ export default function App() {
                   viewMode === "list" ? "bg-white dark:bg-zinc-800 text-slate-900 dark:text-white" : "text-slate-500"
                 }`}
                 title="List View"
+                aria-label="List view"
               >
                 <ListIcon size={14} />
               </button>
@@ -1648,9 +1862,20 @@ export default function App() {
                 className={`p-1.5 rounded-md transition-all ${
                   viewMode === "calendar" ? "bg-white dark:bg-zinc-800 text-slate-900 dark:text-white" : "text-slate-500"
                 }`}
-                title="Calendar Grid View"
+                title="Calendar View"
+                aria-label="Calendar view"
               >
                 <Calendar size={14} />
+              </button>
+              <button
+                onClick={() => setViewMode("plan")}
+                className={`p-1.5 rounded-md transition-all ${
+                  viewMode === "plan" ? "bg-white dark:bg-zinc-800 text-slate-900 dark:text-white" : "text-slate-500"
+                }`}
+                title="My Plan (saved itinerary)"
+                aria-label="My plan"
+              >
+                <Heart size={14} />
               </button>
             </div>
           </div>
@@ -1706,6 +1931,54 @@ export default function App() {
                   </label>
                 );
               })}
+            </div>
+          </div>
+
+          {/* Borough filter */}
+          <div className="space-y-3 pt-2">
+            <div className="flex items-center justify-between">
+              <h3 className="text-[10px] font-bold text-slate-400 dark:text-zinc-500 uppercase tracking-widest">Borough</h3>
+              {selectedBoroughs.length > 0 && (
+                <button onClick={() => setSelectedBoroughs([])} className="text-[9px] text-indigo-600 dark:text-[#5e5ce6] font-semibold hover:underline">Clear</button>
+              )}
+            </div>
+            <div className="flex flex-wrap gap-1.5">
+              {NYC_BOROUGHS.map((b) => {
+                const active = selectedBoroughs.includes(b);
+                return (
+                  <button
+                    key={b}
+                    onClick={() => setSelectedBoroughs((prev) => prev.includes(b) ? prev.filter((x) => x !== b) : [...prev, b])}
+                    className={`px-2.5 py-1 rounded-full text-[10px] font-semibold border transition-all ${active ? "bg-indigo-600 text-white border-indigo-600" : "bg-white dark:bg-zinc-900 border-slate-200 dark:border-zinc-800 text-slate-600 dark:text-zinc-400 hover:border-indigo-400"}`}
+                  >
+                    {b}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Price filter */}
+          <div className="space-y-2.5 pt-2">
+            <h3 className="text-[10px] font-bold text-slate-400 dark:text-zinc-500 uppercase tracking-widest">Price</h3>
+            <label className="flex items-center gap-2 text-xs text-slate-700 dark:text-zinc-300 cursor-pointer">
+              <input type="checkbox" checked={freeOnly} onChange={(e) => setFreeOnly(e.target.checked)} className="w-3.5 h-3.5 rounded border-slate-300 dark:border-zinc-700" />
+              Free events only
+            </label>
+            <div className={freeOnly ? "opacity-40 pointer-events-none" : ""}>
+              <div className="flex items-center justify-between text-[10px] text-slate-500 dark:text-zinc-400 mb-1">
+                <span>Max price</span>
+                <span className="font-mono font-bold">{maxPrice === 0 ? "Any" : `$${maxPrice}`}</span>
+              </div>
+              <input
+                type="range"
+                min={0}
+                max={500}
+                step={10}
+                value={maxPrice}
+                onChange={(e) => setMaxPrice(parseInt(e.target.value, 10))}
+                className="w-full accent-indigo-600"
+              />
             </div>
           </div>
 
@@ -1885,26 +2158,34 @@ export default function App() {
         {/* --- MAIN CONTENT WINDOWS --- */}
         <main className="space-y-6">
           {events.length === 0 && !loading && (
-            <div className="p-12 text-center rounded-2xl bg-white/60 dark:bg-zinc-950/60 backdrop-blur-sm border border-slate-200/60 dark:border-zinc-800">
-              <Info size={32} className="text-slate-400 mx-auto mb-4" />
-              <h3 className="font-bold text-base text-slate-800 dark:text-zinc-200">
-                No events currently loaded
-              </h3>
-              <p className="text-sm text-slate-500 dark:text-zinc-400 mt-2 max-w-md mx-auto">
-                No active event lists are configured. Please check if your Ticketmaster or Gemini API key is configured. You can supply them directly in the settings modal.
-              </p>
+            <div className="p-8 sm:p-12 rounded-2xl bg-white/60 dark:bg-zinc-950/60 backdrop-blur-sm border border-slate-200/60 dark:border-zinc-800">
+              <div className="text-center max-w-md mx-auto">
+                <Sparkles size={32} className="text-indigo-500 mx-auto mb-4" />
+                <h3 className="font-bold text-lg text-slate-800 dark:text-zinc-200">Let's fill your NYC calendar</h3>
+                <p className="text-sm text-slate-500 dark:text-zinc-400 mt-2">
+                  Orch aggregates events from Ticketmaster, live web search, and any venue website you add.
+                </p>
+              </div>
+              <ol className="mt-6 max-w-md mx-auto space-y-3 text-sm">
+                <li className="flex gap-3 items-start">
+                  <span className="w-5 h-5 rounded-full bg-indigo-600 text-white text-[11px] font-bold flex items-center justify-center shrink-0">1</span>
+                  <span className="text-slate-600 dark:text-zinc-300">Add API keys (optional, but Gemini unlocks reading any website). <button onClick={() => setSettingsOpen(true)} className="text-indigo-600 dark:text-indigo-400 font-semibold hover:underline">Open Settings</button></span>
+                </li>
+                <li className="flex gap-3 items-start">
+                  <span className="w-5 h-5 rounded-full bg-indigo-600 text-white text-[11px] font-bold flex items-center justify-center shrink-0">2</span>
+                  <span className="text-slate-600 dark:text-zinc-300">Add event sources — paste a URL or pick the NYC starter pack. <button onClick={() => setSettingsOpen(true)} className="text-indigo-600 dark:text-indigo-400 font-semibold hover:underline">Add sources</button></span>
+                </li>
+                <li className="flex gap-3 items-start">
+                  <span className="w-5 h-5 rounded-full bg-indigo-600 text-white text-[11px] font-bold flex items-center justify-center shrink-0">3</span>
+                  <span className="text-slate-600 dark:text-zinc-300">Browse, save favorites to your plan, and export to your calendar.</span>
+                </li>
+              </ol>
               <div className="mt-6 flex flex-wrap justify-center gap-3">
-                <button
-                  onClick={() => setSettingsOpen(true)}
-                  className="px-4 py-2 bg-slate-950 hover:bg-slate-900 text-white dark:bg-zinc-100 dark:text-black dark:hover:bg-zinc-200 text-xs font-semibold rounded-full"
-                >
-                  Configure API Keys
+                <button onClick={() => setSettingsOpen(true)} className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold rounded-full">
+                  Add your first source
                 </button>
-                <button
-                  onClick={() => fetchTicketmaster(false)}
-                  className="px-4 py-2 border border-slate-200 dark:border-zinc-800 text-xs font-semibold rounded-full hover:bg-slate-100 dark:hover:bg-zinc-900"
-                >
-                  Retry Fetching Sync
+                <button onClick={() => fetchTicketmaster(false)} className="px-4 py-2 border border-slate-200 dark:border-zinc-800 text-xs font-semibold rounded-full hover:bg-slate-100 dark:hover:bg-zinc-900">
+                  Retry sync
                 </button>
               </div>
             </div>
@@ -1937,21 +2218,36 @@ export default function App() {
                 No matching listings found
               </h3>
               <p className="text-sm text-slate-500 dark:text-zinc-400 mt-2">
-                We couldn't locate any items aligning with your current query. Try broadening your date brackets or adjusting keywords.
+                We couldn't locate any loaded items matching your filters. Clear filters, or search the live web for more NYC events.
               </p>
-              <button
-                onClick={() => {
-                  setSelectedCategories(["concerts", "broadway", "classical", "sports"]);
-                  setSelectedSources([]);
-                  setSelectedVenues([]);
-                  setDateFilter("all");
-                  setSearchQuery("");
-                  setSavedOnly(false);
-                }}
-                className="mt-6 px-4 py-2 text-xs font-semibold text-white bg-slate-900 dark:bg-zinc-200 dark:text-slate-900 hover:opacity-90 rounded-full"
-              >
-                Clear all filters
-              </button>
+              <div className="mt-6 flex flex-wrap justify-center gap-3">
+                <button
+                  onClick={() => {
+                    setSelectedCategories(["concerts", "broadway", "classical", "sports", "other"]);
+                    setSelectedSources([]);
+                    setSelectedVenues([]);
+                    setSelectedBoroughs([]);
+                    setMaxPrice(0);
+                    setFreeOnly(false);
+                    setDateFilter("all");
+                    setSearchQuery("");
+                    setSavedOnly(false);
+                  }}
+                  className="px-4 py-2 text-xs font-semibold text-white bg-slate-900 dark:bg-zinc-200 dark:text-slate-900 hover:opacity-90 rounded-full"
+                >
+                  Clear all filters
+                </button>
+                {searchQuery.trim() && (
+                  <button
+                    onClick={() => fetchGoogleEvents(searchQuery.trim())}
+                    disabled={searchingGoogleEvents}
+                    className="px-4 py-2 text-xs font-semibold rounded-full bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-50 flex items-center gap-1.5"
+                  >
+                    {searchingGoogleEvents ? <RefreshCw size={12} className="animate-spin" /> : <Search size={12} />}
+                    Search the web for "{searchQuery.trim()}"
+                  </button>
+                )}
+              </div>
             </div>
           )}
 
@@ -2024,6 +2320,11 @@ export default function App() {
                         >
                           {item.cat}
                         </span>
+                        {item.id.startsWith("seed_") && (
+                          <span className="text-[9px] font-bold px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-600 dark:text-amber-500 uppercase tracking-wide" title="Sample event — sync a source for live listings">
+                            Sample
+                          </span>
+                        )}
                         {item.status === "cancelled" && (
                           <span className="text-[9px] font-bold px-2 py-0.5 rounded-full bg-red-500/15 text-red-500 uppercase tracking-wide">
                             Cancelled
@@ -2107,130 +2408,267 @@ export default function App() {
             </div>
           )}
 
-          {/* --- VIEW MODE B: CALENDAR GRIDS --- */}
+          {/* --- VIEW MODE B: CALENDAR (Month / Week / Agenda) --- */}
           {viewMode === "calendar" && events.length > 0 && (
-            <div className="bg-white/60 dark:bg-zinc-950/60 backdrop-blur-md rounded-2xl p-6 border border-slate-200/60 dark:border-zinc-800/60 space-y-4 animate-fade-in">
-              <div className="flex items-center justify-between border-b border-slate-200 dark:border-zinc-800 pb-3">
-                <div className="flex items-center gap-2">
-                  <button
-                    onClick={() => {
-                      setCalendarMonth((prev) => {
-                        if (prev === 0) {
-                          setCalendarYear((y) => y - 1);
-                          return 11;
-                        }
-                        return prev - 1;
-                      });
-                    }}
-                    className="p-1 px-2.5 bg-slate-100 hover:bg-slate-200 dark:bg-zinc-900 dark:hover:bg-zinc-800 rounded-lg text-slate-600 dark:text-zinc-300 hover:text-slate-900 dark:hover:text-white transition-colors cursor-pointer select-none font-bold"
-                    title="Previous Month"
-                  >
-                    &larr;
-                  </button>
-                  <h3 className="font-bold text-base text-slate-800 dark:text-zinc-100 font-display min-w-[124px] text-center">
-                    {calendarData.monthLabel}
-                  </h3>
-                  <button
-                    onClick={() => {
-                      setCalendarMonth((prev) => {
-                        if (prev === 11) {
-                          setCalendarYear((y) => y + 1);
-                          return 0;
-                        }
-                        return prev + 1;
-                      });
-                    }}
-                    className="p-1 px-2.5 bg-slate-100 hover:bg-slate-200 dark:bg-zinc-900 dark:hover:bg-zinc-800 rounded-lg text-slate-600 dark:text-zinc-300 hover:text-slate-900 dark:hover:text-white transition-colors cursor-pointer select-none font-bold"
-                    title="Next Month"
-                  >
-                    &rarr;
-                  </button>
-                </div>
-                <span className="text-[10px] text-slate-400 font-mono tracking-wider">
-                  Select a cell to inspect listings
-                </span>
-              </div>
+            <div className="bg-white/60 dark:bg-zinc-950/60 backdrop-blur-md rounded-2xl p-4 sm:p-6 border border-slate-200/60 dark:border-zinc-800/60 space-y-4 animate-fade-in">
+              <div className="flex flex-col gap-3 border-b border-slate-200 dark:border-zinc-800 pb-3">
+                <div className="flex items-center justify-between gap-2 flex-wrap">
+                  {/* Period navigation */}
+                  <div className="flex items-center gap-2">
+                    {calendarView !== "agenda" && (
+                      <button
+                        onClick={() => {
+                          if (calendarView === "month") {
+                            setCalendarMonth((prev) => { if (prev === 0) { setCalendarYear((y) => y - 1); return 11; } return prev - 1; });
+                          } else {
+                            setWeekRef((d) => { const n = new Date(d); n.setDate(n.getDate() - 7); return n; });
+                          }
+                        }}
+                        className="p-1 px-2.5 bg-slate-100 hover:bg-slate-200 dark:bg-zinc-900 dark:hover:bg-zinc-800 rounded-lg text-slate-600 dark:text-zinc-300 font-bold"
+                        title="Previous"
+                      >
+                        &larr;
+                      </button>
+                    )}
+                    <h3 className="font-bold text-sm sm:text-base text-slate-800 dark:text-zinc-100 font-display text-center min-w-[120px]">
+                      {calendarView === "month" ? calendarData.monthLabel : calendarView === "week" ? weekData.label : "Upcoming agenda"}
+                    </h3>
+                    {calendarView !== "agenda" && (
+                      <button
+                        onClick={() => {
+                          if (calendarView === "month") {
+                            setCalendarMonth((prev) => { if (prev === 11) { setCalendarYear((y) => y + 1); return 0; } return prev + 1; });
+                          } else {
+                            setWeekRef((d) => { const n = new Date(d); n.setDate(n.getDate() + 7); return n; });
+                          }
+                        }}
+                        className="p-1 px-2.5 bg-slate-100 hover:bg-slate-200 dark:bg-zinc-900 dark:hover:bg-zinc-800 rounded-lg text-slate-600 dark:text-zinc-300 font-bold"
+                        title="Next"
+                      >
+                        &rarr;
+                      </button>
+                    )}
+                  </div>
 
-              {/* Day names row */}
-              <div className="grid grid-cols-7 gap-1.5 text-center text-[10px] font-bold text-slate-400 uppercase tracking-wider">
-                <div>Sun</div>
-                <div>Mon</div>
-                <div>Tue</div>
-                <div>Wed</div>
-                <div>Thu</div>
-                <div>Fri</div>
-                <div>Sat</div>
-              </div>
-
-              {/* Grid block cells */}
-              <div className="grid grid-cols-7 gap-1.5 min-h-[300px]">
-                {calendarData.cells.map((cell, idx) => {
-                  return (
-                    <div
-                      key={idx}
-                      className={`min-h-[70px] sm:min-h-[85px] border border-slate-200/50 dark:border-zinc-850 p-1 sm:p-2 rounded-xl flex flex-col justify-between ${
-                        cell.dateNum === null
-                          ? "opacity-20 bg-slate-100/30 dark:bg-zinc-900/10 cursor-not-allowed"
-                          : "bg-white/30 dark:bg-zinc-900/10"
-                      } ${cell.isToday ? "ring-2 ring-indigo-500 ring-offset-2 dark:ring-offset-black" : ""}`}
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => { const now = new Date(); setCalendarYear(now.getFullYear()); setCalendarMonth(now.getMonth()); setWeekRef(now); }}
+                      className="px-2.5 py-1 text-[11px] font-semibold rounded-lg bg-slate-100 dark:bg-zinc-900 hover:bg-slate-200 dark:hover:bg-zinc-800 text-slate-600 dark:text-zinc-300"
                     >
-                      {cell.dateNum !== null ? (
-                        <>
-                          <div className="flex items-center justify-between">
-                            <span
-                              className={`text-xs font-bold leading-none ${
-                                cell.isToday
-                                  ? "bg-indigo-600 text-white w-5 h-5 rounded-full flex items-center justify-center p-0.5"
-                                  : "text-slate-700 dark:text-zinc-300"
-                              }`}
-                            >
-                              {cell.dateNum}
-                            </span>
-                            {cell.events.length > 0 && (
-                              <span className="text-[8px] sm:text-[9px] bg-slate-100 dark:bg-zinc-800 text-slate-600 dark:text-zinc-300 font-bold px-1 py-0.5 rounded font-mono">
-                                {cell.events.length}
-                              </span>
-                            )}
-                          </div>
-
-                          {/* Dots / Small text listings details */}
-                          <div className="mt-1 space-y-1">
-                            {cell.events.slice(0, 3).map((e) => {
-                              const vColor = customVenueColors[e.venue] || getCategoryColor(e.cat);
-                              return (
-                                <div
-                                  key={e.id}
-                                  onClick={(ev) => {
-                                    ev.stopPropagation();
-                                    setSelectedEventId(e.id);
-                                  }}
-                                  className="group flex items-center gap-1 cursor-pointer"
-                                  title={`${e.title} at ${e.venue}`}
-                                >
-                                  <div
-                                    className="w-1.5 h-1.5 rounded-full shrink-0"
-                                    style={{ backgroundColor: vColor }}
-                                  />
-                                  <span className="hidden sm:inline text-[9px] font-semibold text-slate-700 dark:text-zinc-400 truncate max-w-[80px]">
-                                    {e.title}
-                                  </span>
-                                </div>
-                              );
-                            })}
-                            {cell.events.length > 3 && (
-                              <div className="text-[8px] font-semibold text-slate-400 leading-none">
-                                +{cell.events.length - 3} more
-                              </div>
-                            )}
-                          </div>
-                        </>
-                      ) : (
-                        <div />
-                      )}
+                      Today
+                    </button>
+                    <div className="flex items-center rounded-lg border border-slate-200 dark:border-zinc-800 p-0.5 bg-slate-100 dark:bg-zinc-900 text-[11px] font-semibold">
+                      {(["month", "week", "agenda"] as const).map((v) => (
+                        <button
+                          key={v}
+                          onClick={() => setCalendarView(v)}
+                          className={`px-2.5 py-1 rounded-md transition-all capitalize ${calendarView === v ? "bg-white dark:bg-zinc-800 text-slate-900 dark:text-white" : "text-slate-500"}`}
+                        >
+                          {v}
+                        </button>
+                      ))}
                     </div>
-                  );
-                })}
+                  </div>
+                </div>
+
+                {/* Category color legend */}
+                <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                  {CATEGORIES.map((c) => (
+                    <span key={c.id} className="flex items-center gap-1.5 text-[10px] font-semibold text-slate-500 dark:text-zinc-400">
+                      <span className="w-2 h-2 rounded-full" style={{ backgroundColor: c.color }} />
+                      {c.label}
+                    </span>
+                  ))}
+                </div>
               </div>
+
+              {/* MONTH GRID */}
+              {calendarView === "month" && (
+                <>
+                  <div className="grid grid-cols-7 gap-1.5 text-center text-[10px] font-bold text-slate-400 uppercase tracking-wider">
+                    {["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((d) => <div key={d}>{d}</div>)}
+                  </div>
+                  <div className="grid grid-cols-7 gap-1.5 min-h-[300px]">
+                    {calendarData.cells.map((cell, idx) => {
+                      const cellKey = cell.dateNum !== null ? localDateKey(new Date(calendarYear, calendarMonth, cell.dateNum)) : null;
+                      return (
+                        <div
+                          key={idx}
+                          onClick={() => { if (cellKey && cell.events.length > 0) setDayAgendaKey(cellKey); }}
+                          className={`min-h-[70px] sm:min-h-[88px] border border-slate-200/50 dark:border-zinc-850 p-1 sm:p-2 rounded-xl flex flex-col justify-between transition-all ${
+                            cell.dateNum === null
+                              ? "opacity-20 bg-slate-100/30 dark:bg-zinc-900/10"
+                              : cell.events.length > 0
+                                ? "bg-white/30 dark:bg-zinc-900/10 cursor-pointer hover:border-indigo-400 hover:shadow-sm"
+                                : "bg-white/30 dark:bg-zinc-900/10"
+                          } ${cell.isToday ? "ring-2 ring-indigo-500 ring-offset-2 dark:ring-offset-black" : ""}`}
+                        >
+                          {cell.dateNum !== null ? (
+                            <>
+                              <div className="flex items-center justify-between">
+                                <span className={`text-xs font-bold leading-none ${cell.isToday ? "bg-indigo-600 text-white w-5 h-5 rounded-full flex items-center justify-center p-0.5" : "text-slate-700 dark:text-zinc-300"}`}>
+                                  {cell.dateNum}
+                                </span>
+                                {cell.events.length > 0 && (
+                                  <span className="text-[8px] sm:text-[9px] bg-slate-100 dark:bg-zinc-800 text-slate-600 dark:text-zinc-300 font-bold px-1 py-0.5 rounded font-mono">
+                                    {cell.events.length}
+                                  </span>
+                                )}
+                              </div>
+                              <div className="mt-1 space-y-1">
+                                {cell.events.slice(0, 3).map((e) => {
+                                  const vColor = customVenueColors[e.venue] || getCategoryColor(e.cat);
+                                  const t = new Date(e.start).toLocaleTimeString([], { hour: "numeric" });
+                                  return (
+                                    <div
+                                      key={e.id}
+                                      onClick={(ev) => { ev.stopPropagation(); setSelectedEventId(e.id); }}
+                                      className="group flex items-center gap-1 cursor-pointer"
+                                      title={`${e.title} at ${e.venue}`}
+                                    >
+                                      <div className="w-1.5 h-1.5 rounded-full shrink-0" style={{ backgroundColor: vColor }} />
+                                      <span className="hidden sm:inline text-[9px] font-semibold text-slate-700 dark:text-zinc-400 truncate max-w-[90px]">
+                                        <span className="text-slate-400">{t}</span> {e.title}
+                                      </span>
+                                    </div>
+                                  );
+                                })}
+                                {cell.events.length > 3 && (
+                                  <button
+                                    onClick={(ev) => { ev.stopPropagation(); if (cellKey) setDayAgendaKey(cellKey); }}
+                                    className="text-[8px] font-semibold text-indigo-500 hover:underline leading-none"
+                                  >
+                                    +{cell.events.length - 3} more
+                                  </button>
+                                )}
+                              </div>
+                            </>
+                          ) : (
+                            <div />
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </>
+              )}
+
+              {/* WEEK VIEW */}
+              {calendarView === "week" && (
+                <div className="grid grid-cols-1 sm:grid-cols-7 gap-1.5">
+                  {weekData.days.map((day) => (
+                    <div key={day.key} className={`border border-slate-200/50 dark:border-zinc-850 rounded-xl p-2 min-h-[120px] ${day.isToday ? "ring-2 ring-indigo-500" : ""}`}>
+                      <div className="text-[10px] font-bold text-slate-400 uppercase mb-1.5">
+                        {day.date.toLocaleDateString("en-US", { weekday: "short", day: "numeric" })}
+                      </div>
+                      <div className="space-y-1">
+                        {day.events.length === 0 && <div className="text-[9px] text-slate-300 dark:text-zinc-700">—</div>}
+                        {day.events.map((e) => (
+                          <button
+                            key={e.id}
+                            onClick={() => setSelectedEventId(e.id)}
+                            className="w-full text-left rounded-md px-1.5 py-1 text-[10px] font-semibold truncate hover:opacity-90"
+                            style={{ backgroundColor: `${customVenueColors[e.venue] || getCategoryColor(e.cat)}22`, color: customVenueColors[e.venue] || getCategoryColor(e.cat) }}
+                            title={`${e.title} · ${e.venue}`}
+                          >
+                            {new Date(e.start).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })} {e.title}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* AGENDA VIEW */}
+              {calendarView === "agenda" && (
+                <div className="space-y-4 max-h-[60vh] overflow-y-auto pr-1">
+                  {agendaGroups.length === 0 && <p className="text-sm text-slate-400 text-center py-8">No upcoming events match your filters.</p>}
+                  {agendaGroups.map((group) => (
+                    <div key={group.key} className="flex gap-3">
+                      <div className="w-12 shrink-0 text-center">
+                        <div className="text-[10px] font-bold text-slate-400 uppercase">{group.date.toLocaleDateString("en-US", { month: "short" })}</div>
+                        <div className="text-xl font-extrabold text-slate-800 dark:text-zinc-100">{group.date.getDate()}</div>
+                        <div className="text-[9px] text-slate-400">{group.date.toLocaleDateString("en-US", { weekday: "short" })}</div>
+                      </div>
+                      <div className="flex-1 space-y-1.5">
+                        {group.events.map((e) => (
+                          <button
+                            key={e.id}
+                            onClick={() => setSelectedEventId(e.id)}
+                            className="w-full text-left flex items-center gap-2 p-2 rounded-lg bg-white/50 dark:bg-zinc-900/30 border border-slate-200/50 dark:border-zinc-800/50 hover:border-indigo-400 transition-all"
+                          >
+                            <span className="w-1 h-8 rounded-full shrink-0" style={{ backgroundColor: customVenueColors[e.venue] || getCategoryColor(e.cat) }} />
+                            <div className="min-w-0 flex-1">
+                              <div className="text-xs font-bold truncate text-slate-800 dark:text-zinc-100">{e.title}</div>
+                              <div className="text-[10px] text-slate-500 truncate">
+                                {new Date(e.start).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })} · {e.venue}
+                              </div>
+                            </div>
+                            <span className="text-[11px] font-mono font-bold text-emerald-600 shrink-0">{e.price}</span>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* --- VIEW MODE C: MY PLAN (saved itinerary) --- */}
+          {viewMode === "plan" && (
+            <div className="space-y-5 animate-fade-in">
+              {planGroups.length === 0 ? (
+                <div className="p-12 text-center rounded-2xl bg-white/60 dark:bg-zinc-950/60 border border-slate-200/60 dark:border-zinc-800">
+                  <Heart size={32} className="text-slate-300 mx-auto mb-4" />
+                  <h3 className="font-bold text-base text-slate-800 dark:text-zinc-200">Your plan is empty</h3>
+                  <p className="text-sm text-slate-500 dark:text-zinc-400 mt-2">Tap the heart on any event to build your NYC itinerary here.</p>
+                </div>
+              ) : (
+                <>
+                  <div className="flex items-center justify-between">
+                    <h2 className="text-lg font-extrabold text-slate-900 dark:text-white font-display">My Plan ({savedIds.length})</h2>
+                    <button
+                      onClick={() => downloadMultiICS(events.filter((e) => savedIds.includes(e.id)), "orch-my-plan.ics")}
+                      className="flex items-center gap-1.5 px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-full text-xs font-semibold shadow-sm"
+                    >
+                      <CalendarPlus size={13} /> Export plan (.ics)
+                    </button>
+                  </div>
+                  {planGroups.map((group) => (
+                    <div key={group.key} className="space-y-2">
+                      <h3 className="text-xs font-bold text-slate-400 uppercase tracking-widest">
+                        {group.date.toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" })}
+                      </h3>
+                      {group.overlaps.size > 0 && (
+                        <div className="text-[11px] text-amber-600 dark:text-amber-500 flex items-center gap-1.5 font-medium">
+                          <AlertCircle size={12} /> Some events on this day overlap in time.
+                        </div>
+                      )}
+                      {group.events.map((e) => (
+                        <div
+                          key={e.id}
+                          onClick={() => setSelectedEventId(e.id)}
+                          className={`flex items-center gap-3 p-3 rounded-xl bg-white/60 dark:bg-zinc-950/60 border cursor-pointer hover:border-indigo-400 transition-all ${group.overlaps.has(e.id) ? "border-amber-400/60" : "border-slate-200/50 dark:border-zinc-800/50"}`}
+                        >
+                          <span className="w-1.5 h-10 rounded-full shrink-0" style={{ backgroundColor: customVenueColors[e.venue] || getCategoryColor(e.cat) }} />
+                          <div className="min-w-0 flex-1">
+                            <div className="text-sm font-bold truncate text-slate-800 dark:text-zinc-100">{e.title}</div>
+                            <div className="text-[11px] text-slate-500 truncate">
+                              {new Date(e.start).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })} · {e.venue}
+                            </div>
+                          </div>
+                          <span className="text-xs font-mono font-bold text-emerald-600 shrink-0">{e.price}</span>
+                          <button onClick={(ev) => { ev.stopPropagation(); toggleSave(e.id); }} className="text-[#ff3b30] p-1.5 shrink-0" title="Remove from plan">
+                            <Heart size={15} fill="currentColor" />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  ))}
+                </>
+              )}
             </div>
           )}
         </main>
@@ -2485,6 +2923,48 @@ export default function App() {
                 Buy Tickets
                 <ExternalLink size={14} />
               </a>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* --- DAY AGENDA POPOVER (click a calendar day) --- */}
+      {dayAgendaKey && (
+        <div
+          onClick={() => setDayAgendaKey(null)}
+          className="fixed inset-0 z-[100] bg-black/60 backdrop-blur-md flex items-center justify-center p-4 animate-fade-in"
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            role="dialog"
+            aria-modal="true"
+            className="bg-white dark:bg-zinc-950 w-full max-w-md rounded-3xl p-6 border border-slate-200 dark:border-zinc-850 shadow-2xl space-y-3 max-h-[80vh] overflow-y-auto"
+          >
+            <div className="flex items-center justify-between border-b border-slate-200 dark:border-zinc-800 pb-3">
+              <h3 className="font-extrabold text-base text-slate-800 dark:text-zinc-100 font-display">
+                {new Date(`${dayAgendaKey}T12:00:00`).toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" })}
+              </h3>
+              <button onClick={() => setDayAgendaKey(null)} aria-label="Close" className="p-1.5 hover:bg-slate-100 dark:hover:bg-zinc-900 rounded-full">
+                <X size={18} />
+              </button>
+            </div>
+            <div className="space-y-2">
+              {(eventsByLocalDate[dayAgendaKey] || []).map((e) => (
+                <button
+                  key={e.id}
+                  onClick={() => { setSelectedEventId(e.id); setDayAgendaKey(null); }}
+                  className="w-full text-left flex items-center gap-3 p-2.5 rounded-xl bg-slate-50 dark:bg-zinc-900/40 border border-slate-200/50 dark:border-zinc-800/50 hover:border-indigo-400 transition-all"
+                >
+                  <span className="w-1.5 h-9 rounded-full shrink-0" style={{ backgroundColor: customVenueColors[e.venue] || getCategoryColor(e.cat) }} />
+                  <div className="min-w-0 flex-1">
+                    <div className="text-xs font-bold truncate text-slate-800 dark:text-zinc-100">{e.title}</div>
+                    <div className="text-[10px] text-slate-500 truncate">
+                      {new Date(e.start).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })} · {e.venue}
+                    </div>
+                  </div>
+                  <span className="text-[11px] font-mono font-bold text-emerald-600 shrink-0">{e.price}</span>
+                </button>
+              ))}
             </div>
           </div>
         </div>
