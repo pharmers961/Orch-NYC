@@ -44,6 +44,20 @@ service cloud.firestore {
         && data.updatedAt == request.time;
     }
 
+    // --- COLLECTION RULES: EVENTS (shared, read-only to clients) ---
+    // The scheduled ingest job writes these via the Firebase Admin SDK, which
+    // bypasses these rules. Clients may only read.
+    match /events/{eventId} {
+      allow read: if true;
+      allow write: if false;
+    }
+
+    // --- COLLECTION RULES: META (ingest status, read-only to clients) ---
+    match /meta/{docId} {
+      allow read: if true;
+      allow write: if false;
+    }
+
     // --- COLLECTION RULES: USERS ---
     match /users/{userId} {
       // Allow single document reads only for the owner
