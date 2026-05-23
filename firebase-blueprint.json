@@ -1,0 +1,30 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "User preferences and persistent custom event sources URL list.",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "description": "The user's Firebase Auth User ID"
+        },
+        "sources": {
+          "type": "array",
+          "description": "List of saved custom event source site URLs"
+        },
+        "updatedAt": {
+          "type": "string",
+          "description": "Last updated timestamp"
+        }
+      },
+      "required": ["userId", "sources", "updatedAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "UserProfile",
+      "description": "User specific data and custom source websites list"
+    }
+  }
+}

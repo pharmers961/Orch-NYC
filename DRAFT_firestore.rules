@@ -1,0 +1,70 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Global Safety Net (default deny catch-all)
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // --- PRIMITIVE DEFINITIONS ---
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isEmailVerified() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    // --- VALIDATION BLUEPRINT & SCHEMA ENFORCEMENT ---
+    function isValidUserProfile(data, userId) {
+      return data.keys().hasAll(['userId', 'sources', 'updatedAt'])
+        && data.keys().size() == 3
+        && data.userId == userId
+        && data.userId == request.auth.uid
+        && data.sources is list
+        && data.sources.size() <= 100
+        && data.updatedAt == request.time;
+    }
+
+    // --- COLLECTION RULES: USERS ---
+    match /users/{userId} {
+      // Allow single document reads only for the owner
+      allow get: if isOwner(userId);
+      
+      // Allow list queries only for the owner (Query Enforcer)
+      allow list: if isOwner(userId);
+
+      // Create profile securely
+      allow create: if isOwner(userId)
+                    && isEmailVerified()
+                    && isValidId(userId)
+                    && isValidUserProfile(incoming(), userId);
+
+      // Update profile securely
+      allow update: if isOwner(userId)
+                    && isEmailVerified()
+                    && isValidUserProfile(incoming(), userId)
+                    && incoming().userId == existing().userId; // Immutable field check
+
+      // Delete own profile
+      allow delete: if isOwner(userId);
+    }
+  }
+}
