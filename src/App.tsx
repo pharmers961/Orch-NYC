@@ -85,6 +85,38 @@ function safeGetHostname(url: string | undefined, defaultHost: string): string {
   }
 }
 
+// Normalize a user-pasted URL: prepend https:// if missing, validate, strip trailing slash.
+// Returns null if the input can't be a real URL.
+export function normalizeUrl(raw: string): string | null {
+  if (!raw) return null;
+  let s = raw.trim();
+  if (!s) return null;
+  if (!/^https?:\/\//i.test(s)) s = "https://" + s;
+  try {
+    const u = new URL(s);
+    if (!u.hostname.includes(".")) return null;
+    return u.toString().replace(/\/+$/, "");
+  } catch (_) {
+    return null;
+  }
+}
+
+export function hostOf(url: string): string {
+  return safeGetHostname(url, url);
+}
+
+// A curated starter pack of NYC venue / listing sources for one-click adding.
+export const NYC_STARTER_SOURCES: { url: string; label: string; emoji: string }[] = [
+  { url: "https://www.wnyc.org/events/", label: "WNYC Greene Space", emoji: "📻" },
+  { url: "https://www.carnegiehall.org/Calendar", label: "Carnegie Hall", emoji: "🎻" },
+  { url: "https://www.lincolncenter.org/calendar", label: "Lincoln Center", emoji: "🎼" },
+  { url: "https://www.bam.org/calendar", label: "BAM (Brooklyn)", emoji: "🎭" },
+  { url: "https://www.boweryballroom.com/calendar", label: "Bowery Ballroom", emoji: "🎸" },
+  { url: "https://www.bluenotejazz.com/nyc/shows/", label: "Blue Note Jazz", emoji: "🎷" },
+  { url: "https://cityparksfoundation.org/summerstage/", label: "SummerStage", emoji: "🌳" },
+  { url: "https://www.publictheater.org/", label: "The Public Theater", emoji: "🎬" },
+];
+
 export function getInitialSeedEvents(): EventItem[] {
   const getRelativeDateISO = (offsetDays: number, hourAndMinStr: string) => {
     const d = new Date();
@@ -258,7 +290,14 @@ export default function App() {
   const [addingSource, setAddingSource] = useState(false);
   const [syncingCustom, setSyncingCustom] = useState(false);
   const [syncProgressMsg, setSyncProgressMsg] = useState("");
+  const [syncProgress, setSyncProgress] = useState<{ done: number; total: number }>({ done: 0, total: 0 });
+  const [sourceStatus, setSourceStatus] = useState<Record<string, { status: "ok" | "failed" | "pending"; count: number; lastSync: number | null; error?: string }>>(() => {
+    const saved = localStorage.getItem("marquee_source_status");
+    try { return saved ? JSON.parse(saved) : {}; } catch (_) { return {}; }
+  });
   const [sidebarOpen, setSidebarOpen] = useState(false); // Mobile drawer
+  const [addEventOpen, setAddEventOpen] = useState(false); // Manual add-event modal
+  const [dayAgendaKey, setDayAgendaKey] = useState<string | null>(null); // Calendar day popover (YYYY-MM-DD local)
 
   // Firebase Auth & Database Sync States
   const [currentUser, setCurrentUser] = useState<any>(null);
@@ -394,6 +433,10 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem("marquee_venue_colors", JSON.stringify(customVenueColors));
   }, [customVenueColors]);
+
+  useEffect(() => {
+    localStorage.setItem("marquee_source_status", JSON.stringify(sourceStatus));
+  }, [sourceStatus]);
 
   // Handle auto-refresh interval (5 minutes)
   useEffect(() => {
@@ -730,83 +773,123 @@ export default function App() {
     }
   };
 
-  const parseCustomPage = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!addUrlInput.trim()) return;
+  // Map a server-parsed raw event into our EventItem shape.
+  const mapParsedEvent = (evt: any, sourceUrl: string, provider: EventItem["provider"] = "Gemini"): EventItem => {
+    const VALID_CATS = ["concerts", "broadway", "classical", "sports", "other"];
+    const rawCat = (evt.category || "").toLowerCase();
+    const mappedCat: EventCategory = VALID_CATS.includes(rawCat) ? (rawCat as EventCategory) : "other";
+    return {
+      id: `custom_${Math.random().toString(36).substring(2, 9)}`,
+      title: evt.title || "Untitled Event",
+      artist: evt.artist || "",
+      venue: evt.venue || "NYC Venue",
+      area: SEED_VENU_AREAS[evt.venue] || "New York",
+      cat: mappedCat,
+      price: evt.price || "Check Site",
+      start: `${cleanAndFormatDate(evt.date)}T${evt.time || "19:00"}:00Z`,
+      desc: evt.description || "",
+      ticketUrl: evt.ticketUrl || sourceUrl,
+      image: "",
+      source: hostOf(sourceUrl),
+      provider,
+      added: Date.now(),
+      tags: [],
+    };
+  };
+
+  const recordSourceStatus = (
+    url: string,
+    patch: Partial<{ status: "ok" | "failed" | "pending"; count: number; lastSync: number | null; error?: string }>
+  ) => {
+    setSourceStatus((prev) => ({
+      ...prev,
+      [url]: { status: "pending", count: 0, lastSync: null, ...prev[url], ...patch },
+    }));
+  };
+
+  // Fetch + import a single source URL. Records per-source status, returns parsed count.
+  const importFromUrl = async (src: string): Promise<{ count: number; method?: string; error?: string }> => {
+    recordSourceStatus(src, { status: "pending" });
+    try {
+      const response = await fetch("/api/marquee", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-gemini-key": geminiKey },
+        body: JSON.stringify({ action: "parseUrl", payload: { url: src } }),
+      });
+      const resJson = await response.json();
+      if (resJson.success && Array.isArray(resJson.events) && resJson.events.length > 0) {
+        const parsed = resJson.events.map((evt: any) => mapParsedEvent(evt, src));
+        mergeAndDeDuplicate(parsed);
+        recordSourceStatus(src, { status: "ok", count: parsed.length, lastSync: Date.now(), error: undefined });
+        return { count: parsed.length, method: resJson.method };
+      }
+      const errMsg = resJson.error || "No events found on this page.";
+      recordSourceStatus(src, { status: "failed", lastSync: Date.now(), error: errMsg });
+      return { count: 0, error: errMsg };
+    } catch (err: any) {
+      const errMsg = err?.message || "Network error";
+      recordSourceStatus(src, { status: "failed", lastSync: Date.now(), error: errMsg });
+      return { count: 0, error: errMsg };
+    }
+  };
+
+  // Add one or more sources (newline / comma separated), persist them, and import.
+  const addSources = async (rawInput: string) => {
+    const candidates = rawInput.split(/[\n,]+/).map((s) => s.trim()).filter(Boolean);
+    const normalized = [...new Set(candidates.map(normalizeUrl).filter((u): u is string => !!u))];
+    if (normalized.length === 0) {
+      setErrorMessage("That doesn't look like a valid web address. Try something like https://www.wnyc.org/events/");
+      return;
+    }
     setAddingSource(true);
     setErrorMessage(null);
     setApiSuccessNote(null);
 
-    try {
-      const response = await fetch("/api/marquee", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-gemini-key": geminiKey,
-        },
-        body: JSON.stringify({
-          action: "parseUrl",
-          payload: { url: addUrlInput },
-        }),
-      });
-
-      const resJson = await response.json();
-      if (resJson.success && Array.isArray(resJson.events) && resJson.events.length > 0) {
-        // Append custom user sources list uniquely
-        if (!userSources.includes(addUrlInput)) {
-          const nextSources = [...userSources, addUrlInput];
-          setUserSources(nextSources);
-          if (currentUser) {
-            saveUserSourcesToFirestore(nextSources);
-          }
-        }
-
-        const parsed: EventItem[] = resJson.events.map((evt: any): EventItem => {
-          const hostname = new URL(addUrlInput).hostname.replace("www.", "");
-          const VALID_CATS = ["concerts", "broadway", "classical", "sports", "other"];
-          const rawCat = (evt.category || "").toLowerCase();
-          const mappedCat: EventCategory = VALID_CATS.includes(rawCat) ? (rawCat as EventCategory) : "other";
-          return {
-            id: `custom_${Math.random().toString(36).substring(2, 9)}`,
-            title: evt.title,
-            artist: evt.artist || "",
-            venue: evt.venue || "NYC Venue",
-            area: SEED_VENU_AREAS[evt.venue] || "New York",
-            cat: mappedCat,
-            price: evt.price || "Check Site",
-            start: `${evt.date}T${evt.time || "19:00"}:00Z`,
-            desc: evt.description || "",
-            ticketUrl: evt.ticketUrl || addUrlInput,
-            image: "",
-            source: hostname,
-            provider: "Gemini",
-            added: Date.now(),
-            tags: [],
-          };
-        });
-
-        mergeAndDeDuplicate(parsed);
-        setApiSuccessNote(`Successfully imported ${parsed.length} event(s) from webpage snippet!`);
-        setAddUrlInput("");
-      } else {
-        setErrorMessage(resJson.error || "Could not resolve schemas or event listings from this webpage URL. Please verify format.");
-      }
-    } catch (err: any) {
-      console.error(err);
-      setErrorMessage("Service is unable to extract context. Please check that your Gemini API key is configured.");
-    } finally {
-      setAddingSource(false);
+    // De-dupe (case-insensitive) against existing sources, but still re-import all requested URLs.
+    const existingLower = new Set(userSources.map((s) => s.toLowerCase()));
+    const toAdd = normalized.filter((u) => !existingLower.has(u.toLowerCase()));
+    if (toAdd.length > 0) {
+      const nextSources = [...userSources, ...toAdd];
+      setUserSources(nextSources);
+      if (currentUser) saveUserSourcesToFirestore(nextSources);
     }
+
+    let totalImported = 0;
+    let keyErr = false;
+    for (const url of normalized) {
+      const r = await importFromUrl(url);
+      totalImported += r.count;
+      if (r.count === 0 && r.error && /api key|not configured|quota|rate limit/i.test(r.error)) keyErr = true;
+    }
+
+    if (totalImported > 0) {
+      setApiSuccessNote(`Imported ${totalImported} event(s) from ${normalized.length} source(s).`);
+      setLastUpdated(new Date());
+      setAddUrlInput("");
+    } else if (keyErr) {
+      setErrorMessage("No structured listings were found and AI extraction needs a Gemini API key. Add one in Settings to read arbitrary pages.");
+    } else {
+      setErrorMessage("Couldn't extract events from the page(s). The source was saved — try a more specific listings URL, or 'Sync All' again later.");
+    }
+    setAddingSource(false);
+  };
+
+  const parseCustomPage = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!addUrlInput.trim()) return;
+    await addSources(addUrlInput);
   };
 
   const removeCustomSource = (sourceUrl: string) => {
     const nextSources = userSources.filter((s) => s !== sourceUrl);
     setUserSources(nextSources);
-    if (currentUser) {
-      saveUserSourcesToFirestore(nextSources);
-    }
-    const hostname = new URL(sourceUrl).hostname.replace("www.", "");
-    // Option to prune associated events too
+    if (currentUser) saveUserSourcesToFirestore(nextSources);
+    setSourceStatus((prev) => {
+      const next = { ...prev };
+      delete next[sourceUrl];
+      return next;
+    });
+    const hostname = hostOf(sourceUrl);
     setEvents((prev) => prev.filter((e) => e.source !== hostname));
   };
 
@@ -815,71 +898,62 @@ export default function App() {
     setSyncingCustom(true);
     setErrorMessage(null);
     setApiSuccessNote(null);
+    setSyncProgress({ done: 0, total: userSources.length });
     let totalImported = 0;
     let failedCount = 0;
 
     for (let i = 0; i < userSources.length; i++) {
       const src = userSources[i];
-      const host = new URL(src).hostname.replace("www.", "");
-      setSyncProgressMsg(`Syncing ${host} (${i + 1}/${userSources.length})...`);
-      try {
-        const response = await fetch("/api/marquee", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "x-gemini-key": geminiKey,
-          },
-          body: JSON.stringify({
-            action: "parseUrl",
-            payload: { url: src },
-          }),
-        });
-
-        const resJson = await response.json();
-        if (resJson.success && Array.isArray(resJson.events) && resJson.events.length > 0) {
-          const parsed: EventItem[] = resJson.events.map((evt: any): EventItem => {
-            const VALID_CATS = ["concerts", "broadway", "classical", "sports", "other"];
-            const rawCat = (evt.category || "").toLowerCase();
-            const mappedCat: EventCategory = VALID_CATS.includes(rawCat) ? (rawCat as EventCategory) : "other";
-            return {
-              id: `custom_${Math.random().toString(36).substring(2, 9)}`,
-              title: evt.title,
-              artist: evt.artist || "",
-              venue: evt.venue || "NYC Venue",
-              area: SEED_VENU_AREAS[evt.venue] || "New York",
-              cat: mappedCat,
-              price: evt.price || "Check Site",
-              start: `${cleanAndFormatDate(evt.date)}T${evt.time || "19:00"}:00Z`,
-              desc: evt.description || "",
-              ticketUrl: evt.ticketUrl || src,
-              image: "",
-              source: host,
-              provider: "Gemini",
-              added: Date.now(),
-              tags: [],
-            };
-          });
-          mergeAndDeDuplicate(parsed);
-          totalImported += parsed.length;
-        } else {
-          failedCount++;
-        }
-      } catch (err) {
-        console.error("Failed to sync source:", src, err);
-        failedCount++;
-      }
+      setSyncProgressMsg(`Syncing ${hostOf(src)} (${i + 1}/${userSources.length})...`);
+      const r = await importFromUrl(src);
+      totalImported += r.count;
+      if (r.count === 0) failedCount++;
+      setSyncProgress({ done: i + 1, total: userSources.length });
     }
 
     if (totalImported > 0) {
-      setApiSuccessNote(`Successfully synchronized ${totalImported} new event(s) across your active custom sources!`);
+      setApiSuccessNote(`Synchronized ${totalImported} new event(s) across your custom sources.`);
       setLastUpdated(new Date());
     } else if (failedCount > 0) {
-      setErrorMessage(`Unable to synchronize custom sources. Please check your internet connectivity or supply a refreshed Gemini API key in settings.`);
+      setErrorMessage("Couldn't pull events from your custom sources. Many sites need a Gemini API key for AI extraction — add one in Settings.");
     } else {
       setApiSuccessNote("All custom websites are currently up to date!");
     }
     setSyncingCustom(false);
     setSyncProgressMsg("");
+    setSyncProgress({ done: 0, total: 0 });
+  };
+
+  // Manually add an event the user types in (for pages that can't be scraped).
+  const addManualEvent = (data: {
+    title: string; venue: string; date: string; time: string; price: string;
+    cat: EventCategory; ticketUrl: string; desc: string; artist: string;
+  }) => {
+    if (!data.title.trim() || !data.date) {
+      setErrorMessage("A manual event needs at least a title and a date.");
+      return;
+    }
+    const ticket = normalizeUrl(data.ticketUrl) || "";
+    const ev: EventItem = {
+      id: `manual_${Math.random().toString(36).substring(2, 9)}`,
+      title: data.title.trim(),
+      artist: data.artist.trim(),
+      venue: data.venue.trim() || "NYC Venue",
+      area: SEED_VENU_AREAS[data.venue.trim()] || "New York",
+      cat: data.cat,
+      price: data.price.trim() || "Check Site",
+      start: `${data.date}T${data.time || "19:00"}:00Z`,
+      desc: data.desc.trim(),
+      ticketUrl: ticket,
+      image: "",
+      source: ticket ? hostOf(ticket) : "manual",
+      provider: "Manual",
+      added: Date.now(),
+      tags: ["manual"],
+    };
+    mergeAndDeDuplicate([ev]);
+    setApiSuccessNote(`Added "${ev.title}" to your calendar.`);
+    setAddEventOpen(false);
   };
 
   // --- DERIVED METRICS / FILTER ENGINE ---
@@ -1318,6 +1392,17 @@ export default function App() {
             Ground with Gemini
           </button>
 
+          {/* Add a custom source entry point (opens Settings import section) */}
+          <button
+            onClick={() => setSettingsOpen(true)}
+            className="flex px-3 sm:px-4 py-1.5 bg-emerald-600 text-white hover:bg-emerald-700 active:scale-[0.98] transition-all text-xs font-semibold rounded-full items-center gap-1.5 shadow-sm"
+            id="add-source-btn"
+            title="Add an event website (e.g. wnyc.org) to your calendar"
+          >
+            <Plus size={13} />
+            <span className="hidden sm:inline">Add source</span>
+          </button>
+
           {/* Mobile floating layouts toggler */}
           <button
             onClick={() => setSidebarOpen(!sidebarOpen)}
@@ -1421,6 +1506,14 @@ export default function App() {
               <p className="font-semibold">{errorMessage}</p>
               <p className="opacity-80">Check that your configuration keys are valid. You can add alternative keys inside the Settings dashboard.</p>
             </div>
+            {/api key|not configured|gemini|serpapi|quota|rate limit/i.test(errorMessage) && (
+              <button
+                onClick={() => { setErrorMessage(null); setSettingsOpen(true); }}
+                className="px-3 py-1.5 bg-red-500 text-white rounded-full text-[11px] font-semibold hover:bg-red-600 shrink-0"
+              >
+                Open Settings
+              </button>
+            )}
             <button onClick={() => setErrorMessage(null)} className="p-1 hover:bg-red-500/10 rounded">
               <X size={14} />
             </button>
@@ -1994,9 +2087,19 @@ export default function App() {
                         </a>
                       </div>
 
-                      <span className="text-[8px] font-semibold text-slate-400 dark:text-zinc-500 uppercase tracking-wider font-mono truncate max-w-[100px]">
+                      <button
+                        onClick={(e) => { e.stopPropagation(); setSelectedSources([item.source]); }}
+                        className="text-[8px] font-semibold text-slate-400 dark:text-zinc-500 hover:text-indigo-500 uppercase tracking-wider font-mono truncate max-w-[110px] flex items-center gap-1"
+                        title={`Show only events from ${item.source}`}
+                      >
+                        <img
+                          src={`https://www.google.com/s2/favicons?domain=${item.source}&sz=32`}
+                          alt=""
+                          className="w-3 h-3 rounded-sm"
+                          onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = "none"; }}
+                        />
                         From {item.source}
-                      </span>
+                      </button>
                     </div>
                   </div>
                 );
@@ -2492,30 +2595,66 @@ export default function App() {
             )}
             <>
                 <form onSubmit={parseCustomPage} className="space-y-2 pt-2 border-t border-slate-200 dark:border-zinc-900">
-                  <label className="text-xs font-bold text-slate-500 dark:text-zinc-450 uppercase tracking-wider flex items-center gap-1.5">
-                    <Plus size={14} />
-                    Add a listings page or custom event URL
-                  </label>
-                  <div className="flex gap-2">
-                    <input
-                      type="url"
-                      required
-                      value={addUrlInput}
-                      onChange={(e) => setAddUrlInput(e.target.value)}
-                      placeholder="e.g., https://www.wnyc.org/events/example"
-                      className="flex-1 p-2 text-xs bg-slate-50 dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-xl focus:outline-none focus:ring-1 focus:ring-indigo-500"
-                    />
+                  <div className="flex items-center justify-between">
+                    <label className="text-xs font-bold text-slate-500 dark:text-zinc-450 uppercase tracking-wider flex items-center gap-1.5">
+                      <Plus size={14} />
+                      Add event sources
+                    </label>
+                    <button
+                      type="button"
+                      onClick={() => { setSettingsOpen(false); setAddEventOpen(true); }}
+                      className="text-[10px] font-semibold text-indigo-600 dark:text-indigo-400 hover:underline"
+                    >
+                      + Add by hand
+                    </button>
+                  </div>
+                  <textarea
+                    rows={2}
+                    value={addUrlInput}
+                    onChange={(e) => setAddUrlInput(e.target.value)}
+                    placeholder="Paste one or more URLs (one per line) — e.g. wnyc.org/events, carnegiehall.org/calendar"
+                    className="w-full p-2 text-xs bg-slate-50 dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-xl focus:outline-none focus:ring-1 focus:ring-indigo-500 resize-y"
+                  />
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="text-[10px] text-slate-400 dark:text-zinc-500">
+                      Sites with structured listings import instantly; others use AI (needs a Gemini key).
+                    </p>
                     <button
                       type="submit"
                       disabled={addingSource}
-                      className="px-4 py-2 bg-slate-900 dark:bg-zinc-100 text-white dark:text-black hover:opacity-90 rounded-xl text-xs font-semibold shadow-sm shrink-0"
+                      className="px-4 py-2 bg-slate-900 dark:bg-zinc-100 text-white dark:text-black hover:opacity-90 disabled:opacity-50 rounded-xl text-xs font-semibold shadow-sm shrink-0 flex items-center gap-1.5"
                     >
-                      {addingSource ? "Extracting..." : "Import"}
+                      {addingSource ? (<><RefreshCw size={11} className="animate-spin" /> Importing...</>) : "Import"}
                     </button>
                   </div>
-                  <p className="text-[10px] text-slate-400 dark:text-zinc-500">
-                    Paste any NYC venue or events page (e.g. wnyc.org, carnegiehall.org). Reading the page requires a Gemini API key (set above).
-                  </p>
+
+                  {/* NYC starter pack — one-click add */}
+                  <div className="pt-1">
+                    <span className="text-[9px] font-bold text-slate-400 uppercase tracking-widest">NYC starter pack</span>
+                    <div className="flex flex-wrap gap-1.5 mt-1.5">
+                      {NYC_STARTER_SOURCES.map((s) => {
+                        const already = userSources.some((u) => u.toLowerCase() === s.url.toLowerCase());
+                        return (
+                          <button
+                            key={s.url}
+                            type="button"
+                            disabled={addingSource || already}
+                            onClick={() => addSources(s.url)}
+                            className={`px-2 py-1 rounded-full text-[10px] font-semibold border transition-all flex items-center gap-1 ${
+                              already
+                                ? "bg-emerald-50 dark:bg-emerald-950/30 border-emerald-200 dark:border-emerald-900 text-emerald-600 cursor-default"
+                                : "bg-white dark:bg-zinc-900 border-slate-200 dark:border-zinc-800 text-slate-600 dark:text-zinc-300 hover:border-indigo-400"
+                            }`}
+                            title={s.url}
+                          >
+                            <span>{s.emoji}</span>
+                            <span>{s.label}</span>
+                            {already && <CheckCircle2 size={10} />}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
                 </form>
 
                 {/* User added sources custom manager lists */}
@@ -2536,30 +2675,62 @@ export default function App() {
                       </button>
                     </div>
 
-                    {syncProgressMsg && (
-                      <div className="p-1 px-2 text-[10px] text-indigo-650 dark:text-indigo-400 font-mono bg-indigo-500/5 rounded border border-indigo-500/10 animate-pulse">
-                        {syncProgressMsg}
+                    {syncProgress.total > 0 && (
+                      <div className="space-y-1">
+                        <div className="h-1.5 w-full bg-slate-200 dark:bg-zinc-800 rounded-full overflow-hidden">
+                          <div
+                            className="h-full bg-indigo-600 transition-all"
+                            style={{ width: `${(syncProgress.done / syncProgress.total) * 100}%` }}
+                          />
+                        </div>
+                        {syncProgressMsg && (
+                          <div className="text-[10px] text-indigo-650 dark:text-indigo-400 font-mono">{syncProgressMsg}</div>
+                        )}
                       </div>
                     )}
 
-                    <div className="space-y-1 max-h-36 overflow-y-auto">
+                    <div className="space-y-1 max-h-44 overflow-y-auto">
                       {userSources.map((src) => {
-                        const host = new URL(src).hostname.replace("www.", "");
+                        const host = hostOf(src);
+                        const st = sourceStatus[src];
+                        const dot =
+                          st?.status === "ok" ? "bg-emerald-500"
+                          : st?.status === "failed" ? "bg-red-500"
+                          : st?.status === "pending" ? "bg-amber-400 animate-pulse"
+                          : "bg-slate-300 dark:bg-zinc-700";
                         return (
                           <div
                             key={src}
-                            className="flex items-center justify-between p-2 rounded bg-slate-50 dark:bg-zinc-900/40 text-[11px]"
+                            className="flex items-center justify-between p-2 rounded bg-slate-50 dark:bg-zinc-900/40 text-[11px] gap-2"
                           >
-                            <span className="truncate max-w-[250px] font-mono" title={src}>
-                              {host}
-                            </span>
-                            <button
-                              onClick={() => removeCustomSource(src)}
-                              className="text-red-500 p-1 hover:bg-red-500/10 rounded"
-                              title="Prune this source events"
-                            >
-                              <Trash2 size={12} />
-                            </button>
+                            <div className="flex items-center gap-2 min-w-0">
+                              <span className={`w-2 h-2 rounded-full shrink-0 ${dot}`} title={st?.error || st?.status || "not synced yet"} />
+                              <div className="min-w-0">
+                                <span className="truncate block max-w-[200px] font-mono" title={src}>{host}</span>
+                                <span className="text-[9px] text-slate-400">
+                                  {st?.status === "ok" && `${st.count} event(s)`}
+                                  {st?.status === "failed" && "failed — retry"}
+                                  {st?.status === "pending" && "syncing…"}
+                                  {st?.lastSync ? ` · ${new Date(st.lastSync).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}` : ""}
+                                </span>
+                              </div>
+                            </div>
+                            <div className="flex items-center gap-0.5 shrink-0">
+                              <button
+                                onClick={() => importFromUrl(src)}
+                                className="text-slate-400 hover:text-indigo-500 p-1 hover:bg-indigo-500/10 rounded"
+                                title="Re-sync this source"
+                              >
+                                <RefreshCw size={11} />
+                              </button>
+                              <button
+                                onClick={() => removeCustomSource(src)}
+                                className="text-red-500 p-1 hover:bg-red-500/10 rounded"
+                                title="Remove source & its events"
+                              >
+                                <Trash2 size={12} />
+                              </button>
+                            </div>
                           </div>
                         );
                       })}
@@ -2621,6 +2792,11 @@ export default function App() {
         </div>
       )}
 
+      {/* --- MANUAL ADD-EVENT MODAL --- */}
+      {addEventOpen && (
+        <ManualEventModal onClose={() => setAddEventOpen(false)} onAdd={addManualEvent} />
+      )}
+
       {/* --- STICKY FOOTER --- */}
       <footer className="mt-auto h-12 bg-white/70 dark:bg-black/70 backdrop-blur-xl border-t border-black/10 dark:border-zinc-800/60 flex items-center px-6 justify-between text-[11px] text-slate-400 dark:text-zinc-500 select-none">
         <div className="font-bold uppercase tracking-wider font-mono">
@@ -2636,6 +2812,79 @@ export default function App() {
           )}
         </div>
       </footer>
+    </div>
+  );
+}
+
+// --- MANUAL ADD-EVENT MODAL (isolated form state) ---
+function ManualEventModal({
+  onAdd,
+  onClose,
+}: {
+  onAdd: (d: { title: string; venue: string; date: string; time: string; price: string; cat: EventCategory; ticketUrl: string; desc: string; artist: string }) => void;
+  onClose: () => void;
+}) {
+  const [title, setTitle] = useState("");
+  const [venue, setVenue] = useState("");
+  const [date, setDate] = useState("");
+  const [time, setTime] = useState("19:00");
+  const [price, setPrice] = useState("");
+  const [cat, setCat] = useState<EventCategory>("other");
+  const [ticketUrl, setTicketUrl] = useState("");
+  const [artist, setArtist] = useState("");
+  const [desc, setDesc] = useState("");
+
+  const inputCls = "w-full p-2 text-xs bg-slate-50 dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-xl focus:outline-none focus:ring-1 focus:ring-indigo-500";
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  return (
+    <div onClick={onClose} className="fixed inset-0 z-[100] bg-black/60 backdrop-blur-md flex items-center justify-center p-4 animate-fade-in">
+      <div
+        onClick={(e) => e.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Add an event manually"
+        className="bg-white dark:bg-zinc-950 w-full max-w-md rounded-3xl p-6 border border-slate-200 dark:border-zinc-850 shadow-2xl space-y-4 max-h-[90vh] overflow-y-auto"
+      >
+        <div className="flex items-center justify-between border-b border-slate-200 dark:border-zinc-800 pb-3">
+          <h3 className="font-extrabold text-base text-slate-800 dark:text-zinc-100 flex items-center gap-2">
+            <CalendarPlus size={18} className="text-indigo-600" /> Add an event
+          </h3>
+          <button onClick={onClose} aria-label="Close" className="p-1.5 hover:bg-slate-100 dark:hover:bg-zinc-900 rounded-full">
+            <X size={18} />
+          </button>
+        </div>
+        <form
+          onSubmit={(e) => { e.preventDefault(); onAdd({ title, venue, date, time, price, cat, ticketUrl, desc, artist }); }}
+          className="space-y-3"
+        >
+          <input className={inputCls} placeholder="Event title *" value={title} onChange={(e) => setTitle(e.target.value)} required />
+          <div className="grid grid-cols-2 gap-2">
+            <input className={inputCls} type="date" value={date} onChange={(e) => setDate(e.target.value)} required />
+            <input className={inputCls} type="time" value={time} onChange={(e) => setTime(e.target.value)} />
+          </div>
+          <input className={inputCls} placeholder="Venue (e.g. Blue Note)" value={venue} onChange={(e) => setVenue(e.target.value)} />
+          <input className={inputCls} placeholder="Artist / performer / team" value={artist} onChange={(e) => setArtist(e.target.value)} />
+          <div className="grid grid-cols-2 gap-2">
+            <input className={inputCls} placeholder="Price (e.g. $25, Free)" value={price} onChange={(e) => setPrice(e.target.value)} />
+            <select className={inputCls} value={cat} onChange={(e) => setCat(e.target.value as EventCategory)}>
+              {CATEGORIES.map((c) => (
+                <option key={c.id} value={c.id}>{c.emoji} {c.label}</option>
+              ))}
+            </select>
+          </div>
+          <input className={inputCls} type="url" placeholder="Ticket / info URL (optional)" value={ticketUrl} onChange={(e) => setTicketUrl(e.target.value)} />
+          <textarea className={inputCls} rows={2} placeholder="Description (optional)" value={desc} onChange={(e) => setDesc(e.target.value)} />
+          <button type="submit" className="w-full py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-bold rounded-2xl flex items-center justify-center gap-2 shadow-sm">
+            <Plus size={14} /> Add to calendar
+          </button>
+        </form>
+      </div>
     </div>
   );
 }

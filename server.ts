@@ -151,6 +151,113 @@ function getOfflineFallbackEvents(searchQuery: string = "") {
   return pool.slice(0, 6);
 }
 
+// In-memory cache for parsed URL results to avoid re-hitting sites/LLM (rate-limit friendly)
+const parseUrlCache = new Map<string, { ts: number; events: any[] }>();
+const PARSE_CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
+
+async function fetchWithRetry(url: string, options: any = {}, retries = 2): Promise<Response> {
+  let lastErr: any;
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      return await fetch(url, options);
+    } catch (err) {
+      lastErr = err;
+      if (attempt < retries) {
+        await new Promise((r) => setTimeout(r, 400 * Math.pow(2, attempt)));
+      }
+    }
+  }
+  throw lastErr;
+}
+
+function categorizeEvent(title: string, description: string): string {
+  const hay = `${title || ""} ${description || ""}`.toLowerCase();
+  if (/(philharmonic|opera|symphony|orchestra|chamber|recital|classical|quartet)/.test(hay)) return "classical";
+  if (/(broadway|theater|theatre|\bplay\b|musical|comedy|drama|cabaret)/.test(hay)) return "broadway";
+  if (/(\bvs\.?\b|yankees|mets|knicks|nets|rangers|liberty|\bgame\b|stadium|playoff|nba|nfl|nhl|mlb)/.test(hay)) return "sports";
+  if (/(concert|music|jazz|festival|\bband\b|\blive\b|\bdj\b|rock|hip.?hop|set)/.test(hay)) return "concerts";
+  return "other";
+}
+
+// Deterministically parse schema.org/JSON-LD Event markup from a page (no API key needed).
+function extractJsonLdEvents(html: string, sourceUrl: string): any[] {
+  const events: any[] = [];
+  const scriptRegex = /<script[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi;
+  const blobs: any[] = [];
+  let match;
+  while ((match = scriptRegex.exec(html)) !== null) {
+    try {
+      blobs.push(JSON.parse(match[1].trim()));
+    } catch (_) {
+      // Some sites concatenate multiple JSON objects; ignore unparseable blocks.
+    }
+  }
+
+  const visit = (node: any) => {
+    if (!node || typeof node !== "object") return;
+    if (Array.isArray(node)) { node.forEach(visit); return; }
+    if (node["@graph"]) visit(node["@graph"]);
+    if (node.subEvent) visit(node.subEvent);
+
+    const rawType = node["@type"];
+    const types = Array.isArray(rawType) ? rawType : [rawType];
+    const isEvent = types.some((t: any) => typeof t === "string" && /Event/i.test(t));
+    if (!isEvent || !node.name) return;
+
+    let date = "";
+    let time = "19:00";
+    if (node.startDate) {
+      const dt = new Date(node.startDate);
+      if (!isNaN(dt.getTime())) {
+        date = dt.toISOString().split("T")[0];
+        const tMatch = String(node.startDate).match(/T(\d{2}:\d{2})/);
+        time = tMatch ? tMatch[1] : dt.toISOString().split("T")[1].slice(0, 5);
+      }
+    }
+
+    let venue = "NYC Venue";
+    if (typeof node.location === "string") venue = node.location;
+    else if (node.location?.name) venue = node.location.name;
+    else if (node.location?.address?.addressLocality) venue = node.location.address.addressLocality;
+
+    let price = "Check Site";
+    const offers = Array.isArray(node.offers) ? node.offers[0] : node.offers;
+    if (offers) {
+      const p = offers.lowPrice ?? offers.price;
+      if (p !== undefined && p !== null && `${p}`.trim() !== "") {
+        const cur = !offers.priceCurrency || offers.priceCurrency === "USD" ? "$" : "";
+        price = Number(p) === 0 ? "Free" : `${cur}${p}`;
+      }
+    }
+
+    const performer = Array.isArray(node.performer) ? node.performer[0] : node.performer;
+    const desc = typeof node.description === "string" ? node.description.replace(/<[^>]+>/g, "").trim().slice(0, 400) : "";
+
+    events.push({
+      title: typeof node.name === "string" ? node.name.trim() : String(node.name),
+      artist: performer?.name || "",
+      venue,
+      category: categorizeEvent(node.name, node.description || ""),
+      date,
+      time,
+      price,
+      ticketUrl: node.url || offers?.url || sourceUrl,
+      description: desc,
+    });
+  };
+
+  blobs.forEach(visit);
+  // Only keep events with a resolvable date; de-dupe by title+date.
+  const seen = new Set<string>();
+  return events.filter((e) => {
+    if (!e.date) return false;
+    const key = `${e.title.toLowerCase()}_${e.date}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  }).slice(0, 25);
+}
+
 async function startServer() {
   const app = express();
   app.use(express.json({ limit: "5mb" }));
@@ -178,7 +285,7 @@ async function startServer() {
         const url = `https://app.ticketmaster.com/discovery/v2/events.json?apikey=${TICKETMASTER_KEY}&dmaId=345&sort=date,asc&size=100&startDateTime=${now}&locale=*`;
         
         try {
-          const apiRes = await fetch(url);
+          const apiRes = await fetchWithRetry(url);
           if (!apiRes.ok) {
             const errBody = await apiRes.text();
             console.error("Ticketmaster API returned non-200:", apiRes.status, errBody);
@@ -450,17 +557,31 @@ Ensure all keys are formatted perfectly in JSON. Do not return any backticks, ma
           return res.status(400).json({ success: false, error: "Missing url parameter" });
         }
 
+        // 0. Serve from cache if fresh (rate-limit friendly).
+        const cached = parseUrlCache.get(url);
+        if (cached && Date.now() - cached.ts < PARSE_CACHE_TTL_MS) {
+          return res.status(200).json({ success: true, events: cached.events, cached: true });
+        }
+
         let webpageText = "";
         let fetchSucceeded = false;
 
         try {
-          const fetchRes = await fetch(url, {
+          const fetchRes = await fetchWithRetry(url, {
             headers: {
               'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0 Safari/537.36'
             }
           });
           if (fetchRes.ok) {
             const html = await fetchRes.text();
+
+            // 1. Try deterministic schema.org / JSON-LD extraction first — no API key required.
+            const ldEvents = extractJsonLdEvents(html, url);
+            if (ldEvents.length > 0) {
+              parseUrlCache.set(url, { ts: Date.now(), events: ldEvents });
+              return res.status(200).json({ success: true, events: ldEvents, method: "schema.org" });
+            }
+
             // Strip styles, scripts, and HTML tags to keep it within tokens
             webpageText = html
               .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '')
@@ -474,13 +595,15 @@ Ensure all keys are formatted perfectly in JSON. Do not return any backticks, ma
           console.log(`Direct fetch for ${url} failed or was blocked by CORS, falling back solely to Gemini grounding retrieval.`);
         }
 
+        // 2. LLM fallback (needs a Gemini key).
         let ai;
         try {
           ai = getGeminiClient(clientGeminiKey);
         } catch (geminiInitErr: any) {
           return res.status(200).json({
             success: false,
-            error: "Gemini API key is not configured. Please supply a key in Settings or the server environment.",
+            errorCode: "NO_GEMINI_KEY",
+            error: "No structured event data (schema.org) was found on this page, and AI extraction needs a Gemini API key. Add one in Settings, or try a page with structured event listings.",
             events: []
           });
         }
@@ -542,7 +665,10 @@ Ensure all keys are formatted perfectly in JSON. Do not return any backticks or 
         try {
           const jsonText = response && response.text ? response.text.trim() : "[]";
           const events = JSON.parse(jsonText);
-          return res.status(200).json({ success: true, events });
+          if (Array.isArray(events) && events.length > 0) {
+            parseUrlCache.set(url, { ts: Date.now(), events });
+          }
+          return res.status(200).json({ success: true, events, method: "ai" });
         } catch (parseError: any) {
           console.error("Failed to parse static page extracted event JSON:", parseError);
           return res.status(200).json({ success: false, error: "Failed to parse schedules extracted from this target URL." });
