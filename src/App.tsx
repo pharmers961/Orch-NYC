@@ -428,6 +428,12 @@ export default function App() {
     }
     // Pull NYC Google Events automatically on launch
     fetchGoogleEvents("popular events");
+
+    // Auto-import any saved custom sources (e.g. wnyc.org) on launch so their
+    // events appear on the calendar without a manual "Sync All" or sign-in.
+    if (userSources.length > 0) {
+      syncAllCustomSources();
+    }
   }, []);
 
   // --- NORMALIZE & DE-DUPLICATE ENGINE ---
@@ -2468,30 +2474,23 @@ export default function App() {
               </label>
             </div>
 
-            {/* Custom scraping parsing forms */}
-            {!currentUser ? (
-              <div className="pt-2 border-t border-slate-200 dark:border-zinc-900 space-y-3">
-                <label className="text-xs font-bold text-slate-500 dark:text-zinc-450 uppercase tracking-wider flex items-center gap-1.5">
-                  <Plus size={14} />
-                  Add & Save Custom Event sources
-                </label>
-                <div className="p-4 bg-indigo-50/50 dark:bg-indigo-950/20 border border-indigo-100/50 dark:border-indigo-950/40 rounded-2xl flex flex-col items-center text-center gap-3">
-                  <div>
-                    <h5 className="text-[12px] font-bold text-indigo-900 dark:text-indigo-450">Save your sources permanently</h5>
-                    <p className="text-[10.5px] text-slate-500 dark:text-zinc-400 mt-0.5">Please sign in with Google to add custom event listings and sync them permanently across your devices.</p>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={loginWithGoogle}
-                    className="flex items-center gap-1.5 px-4 py-2 bg-indigo-600 hover:bg-indigo-750 text-white rounded-xl text-xs font-semibold shadow-sm transition-all"
-                  >
-                    <LogIn size={13} />
-                    Sign In with Google
-                  </button>
-                </div>
+            {/* Custom scraping parsing forms — available to everyone; sign-in only adds cross-device sync */}
+            {!currentUser && (
+              <div className="pt-2 border-t border-slate-200 dark:border-zinc-900 flex items-center justify-between gap-3 p-3 rounded-2xl bg-indigo-50/50 dark:bg-indigo-950/20 border border-indigo-100/50 dark:border-indigo-950/40">
+                <p className="text-[10.5px] text-slate-500 dark:text-zinc-400">
+                  Sign in with Google to sync your custom sources across devices (optional — importing works without it).
+                </p>
+                <button
+                  type="button"
+                  onClick={loginWithGoogle}
+                  className="flex items-center gap-1.5 px-3 py-1.5 bg-indigo-600 hover:bg-indigo-750 text-white rounded-xl text-xs font-semibold shadow-sm transition-all shrink-0"
+                >
+                  <LogIn size={13} />
+                  Sign In
+                </button>
               </div>
-            ) : (
-              <>
+            )}
+            <>
                 <form onSubmit={parseCustomPage} className="space-y-2 pt-2 border-t border-slate-200 dark:border-zinc-900">
                   <label className="text-xs font-bold text-slate-500 dark:text-zinc-450 uppercase tracking-wider flex items-center gap-1.5">
                     <Plus size={14} />
@@ -2514,6 +2513,9 @@ export default function App() {
                       {addingSource ? "Extracting..." : "Import"}
                     </button>
                   </div>
+                  <p className="text-[10px] text-slate-400 dark:text-zinc-500">
+                    Paste any NYC venue or events page (e.g. wnyc.org, carnegiehall.org). Reading the page requires a Gemini API key (set above).
+                  </p>
                 </form>
 
                 {/* User added sources custom manager lists */}
@@ -2565,7 +2567,6 @@ export default function App() {
                   </div>
                 )}
               </>
-            )}
 
             {/* Google Events API Section */}
             <div className="pt-4 border-t border-slate-200 dark:border-zinc-900 space-y-3">
