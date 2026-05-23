@@ -591,10 +591,13 @@ Ensure all keys are formatted perfectly in JSON. Do not return any backticks, ma
               .replace(/<[^>]+>/g, ' ')
               .replace(/\s+/g, ' ')
               .slice(0, 30000);
-            fetchSucceeded = true;
+            // Only trust the page text if it has real content. Many event calendars
+            // (e.g. wnyc.org) are JS-rendered and return near-empty HTML, in which case
+            // a Google-grounded search for the URL produces far better results.
+            fetchSucceeded = webpageText.trim().length > 600;
           }
         } catch (fetchErr) {
-          console.log(`Direct fetch for ${url} failed or was blocked by CORS, falling back solely to Gemini grounding retrieval.`);
+          console.log(`Direct fetch for ${url} failed or was blocked, falling back to Gemini grounding retrieval.`);
         }
 
         // 2. LLM fallback (needs a Gemini key).
@@ -610,16 +613,16 @@ Ensure all keys are formatted perfectly in JSON. Do not return any backticks, ma
           });
         }
 
-        const domainAndUrlPrompt = fetchSucceeded 
+        const domainAndUrlPrompt = fetchSucceeded
           ? `We fetched the webpage content for the event page: ${url}. The plain-text content is below:
 ---
 ${webpageText}
 ---
-Analyze this content and extract the event(s) scheduled. Make sure to find the Title, Performing Artist or Team, Date, Time, Venue, Price, and a short Description. Set the ticketUrl to the direct ticketing page if present, otherwise set it to "${url}".`
-          : `We could not fetch the webpage directly. Please search the web or lookup the event page: "${url}" using Google Search and extract its events. Set ticketUrl to "${url}".`;
+Analyze this content and extract the event(s) scheduled. Make sure to find the Title, Performing Artist or Team, Date, Time, Venue, Price, and a short Description. If the page text looks incomplete or truncated, ALSO use Google Search to find the current event listings for this page. Set the ticketUrl to the direct ticketing page if present, otherwise set it to "${url}".`
+          : `We could not read the webpage directly (it may be JS-rendered or blocking scrapers). Use Google Search to look up the current event listings for the page "${url}" (and the organization/venue it represents) and extract its upcoming events. Set ticketUrl to the most specific ticket/info page you can find, otherwise "${url}".`;
 
         const finalPrompt = `${domainAndUrlPrompt}
-Return a JSON array of parsed events. If multiple events are scheduled (like a roster/listings page), parse up to 5 events. If a single event, parse 1 event.
+Return a JSON array of parsed events. If multiple events are scheduled (like a roster/listings page), parse up to 20 events. If a single event, parse 1 event.
 Each event in the array MUST strictly follow this JSON schema:
 {
   "title": "Clean event title",

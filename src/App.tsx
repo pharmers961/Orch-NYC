@@ -893,7 +893,9 @@ export default function App() {
         recordSourceStatus(src, { status: "ok", count: parsed.length, lastSync: Date.now(), error: undefined });
         return { count: parsed.length, method: resJson.method };
       }
-      const errMsg = resJson.error || "No events found on this page.";
+      const errMsg = resJson.errorCode === "NO_GEMINI_KEY"
+        ? "Needs a Gemini API key"
+        : (resJson.error || "No events found on this page.");
       recordSourceStatus(src, { status: "failed", lastSync: Date.now(), error: errMsg });
       return { count: 0, error: errMsg };
     } catch (err: any) {
@@ -3189,7 +3191,7 @@ export default function App() {
                                 <span className="truncate block max-w-[200px] font-mono" title={src}>{host}</span>
                                 <span className="text-[9px] text-slate-400">
                                   {st?.status === "ok" && `${st.count} event(s)`}
-                                  {st?.status === "failed" && "failed — retry"}
+                                  {st?.status === "failed" && (st.error ? st.error.slice(0, 30) : "failed — retry")}
                                   {st?.status === "pending" && "syncing…"}
                                   {st?.lastSync ? ` · ${new Date(st.lastSync).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}` : ""}
                                 </span>
