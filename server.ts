@@ -1,27 +1,12 @@
 import express from "express";
 import path from "path";
 import { createServer as createViteServer } from "vite";
-import { GoogleGenAI, Type } from "@google/genai";
 import dotenv from "dotenv";
+import { getGeminiClient, fetchWithRetry, extractJsonLdEvents } from "./serverLib";
 
 dotenv.config();
 
 const PORT = 3000;
-
-function getGeminiClient(clientApiKey?: string) {
-  const apiKey = clientApiKey || process.env.GEMINI_API_KEY;
-  if (!apiKey) {
-    throw new Error("GEMINI_API_KEY environment variable is required or must be supplied in headers/settings.");
-  }
-  return new GoogleGenAI({
-    apiKey: apiKey,
-    httpOptions: {
-      headers: {
-        'User-Agent': 'aistudio-build',
-      }
-    }
-  });
-}
 
 function getOfflineFallbackEvents(searchQuery: string = "") {
   const qClean = searchQuery.toLowerCase();
@@ -151,6 +136,10 @@ function getOfflineFallbackEvents(searchQuery: string = "") {
   return pool.slice(0, 6);
 }
 
+// In-memory cache for parsed URL results to avoid re-hitting sites/LLM (rate-limit friendly)
+const parseUrlCache = new Map<string, { ts: number; events: any[] }>();
+const PARSE_CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
+
 async function startServer() {
   const app = express();
   app.use(express.json({ limit: "5mb" }));
@@ -178,7 +167,7 @@ async function startServer() {
         const url = `https://app.ticketmaster.com/discovery/v2/events.json?apikey=${TICKETMASTER_KEY}&dmaId=345&sort=date,asc&size=100&startDateTime=${now}&locale=*`;
         
         try {
-          const apiRes = await fetch(url);
+          const apiRes = await fetchWithRetry(url);
           if (!apiRes.ok) {
             const errBody = await apiRes.text();
             console.error("Ticketmaster API returned non-200:", apiRes.status, errBody);
@@ -450,17 +439,31 @@ Ensure all keys are formatted perfectly in JSON. Do not return any backticks, ma
           return res.status(400).json({ success: false, error: "Missing url parameter" });
         }
 
+        // 0. Serve from cache if fresh (rate-limit friendly).
+        const cached = parseUrlCache.get(url);
+        if (cached && Date.now() - cached.ts < PARSE_CACHE_TTL_MS) {
+          return res.status(200).json({ success: true, events: cached.events, cached: true });
+        }
+
         let webpageText = "";
         let fetchSucceeded = false;
 
         try {
-          const fetchRes = await fetch(url, {
+          const fetchRes = await fetchWithRetry(url, {
             headers: {
               'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0 Safari/537.36'
             }
           });
           if (fetchRes.ok) {
             const html = await fetchRes.text();
+
+            // 1. Try deterministic schema.org / JSON-LD extraction first — no API key required.
+            const ldEvents = extractJsonLdEvents(html, url);
+            if (ldEvents.length > 0) {
+              parseUrlCache.set(url, { ts: Date.now(), events: ldEvents });
+              return res.status(200).json({ success: true, events: ldEvents, method: "schema.org" });
+            }
+
             // Strip styles, scripts, and HTML tags to keep it within tokens
             webpageText = html
               .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '')
@@ -468,33 +471,38 @@ Ensure all keys are formatted perfectly in JSON. Do not return any backticks, ma
               .replace(/<[^>]+>/g, ' ')
               .replace(/\s+/g, ' ')
               .slice(0, 30000);
-            fetchSucceeded = true;
+            // Only trust the page text if it has real content. Many event calendars
+            // (e.g. wnyc.org) are JS-rendered and return near-empty HTML, in which case
+            // a Google-grounded search for the URL produces far better results.
+            fetchSucceeded = webpageText.trim().length > 600;
           }
         } catch (fetchErr) {
-          console.log(`Direct fetch for ${url} failed or was blocked by CORS, falling back solely to Gemini grounding retrieval.`);
+          console.log(`Direct fetch for ${url} failed or was blocked, falling back to Gemini grounding retrieval.`);
         }
 
+        // 2. LLM fallback (needs a Gemini key).
         let ai;
         try {
           ai = getGeminiClient(clientGeminiKey);
         } catch (geminiInitErr: any) {
           return res.status(200).json({
             success: false,
-            error: "Gemini API key is not configured. Please supply a key in Settings or the server environment.",
+            errorCode: "NO_GEMINI_KEY",
+            error: "No structured event data (schema.org) was found on this page, and AI extraction needs a Gemini API key. Add one in Settings, or try a page with structured event listings.",
             events: []
           });
         }
 
-        const domainAndUrlPrompt = fetchSucceeded 
+        const domainAndUrlPrompt = fetchSucceeded
           ? `We fetched the webpage content for the event page: ${url}. The plain-text content is below:
 ---
 ${webpageText}
 ---
-Analyze this content and extract the event(s) scheduled. Make sure to find the Title, Performing Artist or Team, Date, Time, Venue, Price, and a short Description. Set the ticketUrl to the direct ticketing page if present, otherwise set it to "${url}".`
-          : `We could not fetch the webpage directly. Please search the web or lookup the event page: "${url}" using Google Search and extract its events. Set ticketUrl to "${url}".`;
+Analyze this content and extract the event(s) scheduled. Make sure to find the Title, Performing Artist or Team, Date, Time, Venue, Price, and a short Description. If the page text looks incomplete or truncated, ALSO use Google Search to find the current event listings for this page. Set the ticketUrl to the direct ticketing page if present, otherwise set it to "${url}".`
+          : `We could not read the webpage directly (it may be JS-rendered or blocking scrapers). Use Google Search to look up the current event listings for the page "${url}" (and the organization/venue it represents) and extract its upcoming events. Set ticketUrl to the most specific ticket/info page you can find, otherwise "${url}".`;
 
         const finalPrompt = `${domainAndUrlPrompt}
-Return a JSON array of parsed events. If multiple events are scheduled (like a roster/listings page), parse up to 5 events. If a single event, parse 1 event.
+Return a JSON array of parsed events. If multiple events are scheduled (like a roster/listings page), parse up to 20 events. If a single event, parse 1 event.
 Each event in the array MUST strictly follow this JSON schema:
 {
   "title": "Clean event title",
@@ -542,7 +550,10 @@ Ensure all keys are formatted perfectly in JSON. Do not return any backticks or 
         try {
           const jsonText = response && response.text ? response.text.trim() : "[]";
           const events = JSON.parse(jsonText);
-          return res.status(200).json({ success: true, events });
+          if (Array.isArray(events) && events.length > 0) {
+            parseUrlCache.set(url, { ts: Date.now(), events });
+          }
+          return res.status(200).json({ success: true, events, method: "ai" });
         } catch (parseError: any) {
           console.error("Failed to parse static page extracted event JSON:", parseError);
           return res.status(200).json({ success: false, error: "Failed to parse schedules extracted from this target URL." });
