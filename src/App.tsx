@@ -138,98 +138,6 @@ export const NYC_STARTER_SOURCES: { url: string; label: string; emoji: string }[
   { url: "https://www.publictheater.org/", label: "The Public Theater", emoji: "🎬" },
 ];
 
-export function getInitialSeedEvents(): EventItem[] {
-  const getRelativeDateISO = (offsetDays: number, hourAndMinStr: string) => {
-    const d = new Date();
-    d.setDate(d.getDate() + offsetDays);
-    const datePart = d.toISOString().split("T")[0];
-    return `${datePart}T${hourAndMinStr}:00Z`;
-  };
-
-  return [
-    {
-      id: "seed_google_1",
-      title: "Lincoln Center Open Air Summer Concert",
-      artist: "NYC Philharmonic Ensemble",
-      venue: "Lincoln Center",
-      area: "Manhattan",
-      cat: "classical",
-      price: "Free",
-      start: getRelativeDateISO(1, "19:00"),
-      desc: "Enjoy an evening of breathtaking symphonies under the open stars in Manhattan with the New York Philharmonic ensemble.",
-      ticketUrl: "https://google.com/events",
-      image: "",
-      source: "google.com/events",
-      provider: "Gemini",
-      added: Date.now()
-    },
-    {
-      id: "seed_wnyc_1",
-      title: "WNYC Greene Space: The Future of Public Media",
-      artist: "WNYC Hosts & Special Guests",
-      venue: "The Greene Space",
-      area: "Manhattan",
-      cat: "other",
-      price: "$15",
-      start: getRelativeDateISO(2, "18:30"),
-      desc: "Live interactive panel discussing the future of storytelling, podcasting, and independent local journalism, hosted by WNYC.",
-      ticketUrl: "https://www.wnyc.org/events/",
-      image: "",
-      source: "wnyc.org",
-      provider: "Gemini",
-      added: Date.now()
-    },
-    {
-      id: "seed_google_2",
-      title: "Brooklyn Botanic Garden Sunset Serenade",
-      artist: "The Brooklyn Jazz Collective",
-      venue: "Brooklyn Botanic Garden",
-      area: "Brooklyn",
-      cat: "concerts",
-      price: "$25",
-      start: getRelativeDateISO(3, "19:30"),
-      desc: "Stroll through blooming gardens and settle in for live twilight jazz sets orchestrated by Brooklyn's premier jazz collective.",
-      ticketUrl: "https://google.com/events",
-      image: "",
-      source: "google.com/events",
-      provider: "Gemini",
-      added: Date.now()
-    },
-    {
-      id: "seed_wnyc_2",
-      title: "WNYC Presents: Selected Shorts Live",
-      artist: "Acclaimed Stage and Screen Actors",
-      venue: "Symphony Space",
-      area: "Manhattan",
-      cat: "broadway",
-      price: "$30+",
-      start: getRelativeDateISO(4, "19:00"),
-      desc: "Classic and contemporary short stories read aloud by celebrated actors of Broadway and Hollywood. Introduced by WNYC hosts.",
-      ticketUrl: "https://www.wnyc.org/events/",
-      image: "",
-      source: "wnyc.org",
-      provider: "Gemini",
-      added: Date.now()
-    },
-    {
-      id: "seed_tm_1",
-      title: "Yankees vs. Red Sox (Traditional Rivalry)",
-      artist: "New York Yankees",
-      venue: "Yankee Stadium",
-      area: "Bronx",
-      cat: "sports",
-      price: "$45+",
-      start: getRelativeDateISO(5, "13:05"),
-      desc: "Catch the classic rivalry live at Yankee Stadium in the Bronx with thousands of passionate baseball fans.",
-      ticketUrl: "https://www.ticketmaster.com",
-      image: "",
-      source: "ticketmaster.com",
-      provider: "Ticketmaster",
-      added: Date.now()
-    }
-  ];
-}
-
 export default function App() {
   // --- STATE ---
   const [events, setEvents] = useState<EventItem[]>(() => {
@@ -237,12 +145,13 @@ export default function App() {
     if (saved) {
       try {
         const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          return parsed;
+        if (Array.isArray(parsed)) {
+          // Drop any previously-cached sample/seed events.
+          return parsed.filter((e) => !String(e?.id).startsWith("seed_"));
         }
       } catch (_) {}
     }
-    return getInitialSeedEvents();
+    return [];
   });
   const [savedIds, setSavedIds] = useState<string[]>(() => {
     const saved = localStorage.getItem("marquee_saved_ids");
@@ -423,24 +332,6 @@ export default function App() {
     }, 300000);
     return () => clearInterval(interval);
   }, [autoRefresh, ticketmasterKey]);
-
-  // Ensure sample seeds exist so the app is never empty on first run (badged "Sample").
-  useEffect(() => {
-    const hasGoogle = events.some((e) => e.source === "google.com/events");
-    const hasWnyc = events.some((e) => e.source === "wnyc.org");
-    if (!hasGoogle || !hasWnyc) {
-      const seeds = getInitialSeedEvents();
-      setEvents((prev) => {
-        const combined = [...prev];
-        seeds.forEach((seed) => {
-          if (!combined.some((e) => e.id === seed.id || e.title === seed.title)) {
-            combined.push(seed);
-          }
-        });
-        return combined;
-      });
-    }
-  }, []);
 
   // Primary data path: fetch the shared events.json published by the scheduled
   // scraper (GitHub Actions). The browser no longer scrapes on every visit.
@@ -972,11 +863,7 @@ export default function App() {
 
   // --- DERIVED METRICS / FILTER ENGINE ---
   const activeSources = useMemo(() => {
-    const list = events.map((e) => e.source);
-    if (!list.includes("ticketmaster.com")) list.push("ticketmaster.com");
-    if (!list.includes("google.com/events")) list.push("google.com/events");
-    if (!list.includes("wnyc.org")) list.push("wnyc.org");
-    return [...new Set(list)];
+    return [...new Set(events.map((e) => e.source).filter(Boolean))];
   }, [events]);
 
   const activeVenues = useMemo(() => {
@@ -2228,11 +2115,6 @@ export default function App() {
                         >
                           {item.cat}
                         </span>
-                        {item.id.startsWith("seed_") && (
-                          <span className="text-[9px] font-bold px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-600 dark:text-amber-500 uppercase tracking-wide" title="Sample event — sync a source for live listings">
-                            Sample
-                          </span>
-                        )}
                         {item.status === "cancelled" && (
                           <span className="text-[9px] font-bold px-2 py-0.5 rounded-full bg-red-500/15 text-red-500 uppercase tracking-wide">
                             Cancelled
