@@ -185,9 +185,10 @@ async function main() {
     }
   }
 
-  // De-dupe by id (last write wins).
+  // Drop past events (keep a 1-day grace window), then de-dupe by id.
+  const cutoff = Date.now() - 24 * 60 * 60 * 1000;
   const byId = new Map<string, any>();
-  all.forEach((e) => byId.set(e.id, e));
+  all.filter((e) => e.startTs >= cutoff).forEach((e) => byId.set(e.id, e));
   const events = [...byId.values()].sort((a, b) => a.startTs - b.startTs);
 
   const payload = {
