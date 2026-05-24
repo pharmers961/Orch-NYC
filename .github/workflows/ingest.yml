@@ -1,0 +1,35 @@
+name: Scheduled event ingest
+
+# Triggers the server's /api/ingest endpoint so the scraper runs on a timer
+# and refreshes the shared Firestore `events` collection.
+#
+# Required repository secrets (Settings -> Secrets and variables -> Actions):
+#   APP_URL        e.g. https://your-app-xyz.run.app   (no trailing slash)
+#   INGEST_SECRET  must match the INGEST_SECRET env var set on the deployed server
+
+on:
+  schedule:
+    - cron: "0 * * * *" # hourly, on the hour (UTC)
+  workflow_dispatch: {} # allow manual "Run workflow" from the Actions tab
+
+jobs:
+  ingest:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger ingest
+        run: |
+          if [ -z "${{ secrets.APP_URL }}" ] || [ -z "${{ secrets.INGEST_SECRET }}" ]; then
+            echo "::error::APP_URL and INGEST_SECRET repository secrets must be set."
+            exit 1
+          fi
+          code=$(curl -sS -o response.json -w "%{http_code}" \
+            -X POST "${{ secrets.APP_URL }}/api/ingest" \
+            -H "Content-Type: application/json" \
+            -H "x-ingest-secret: ${{ secrets.INGEST_SECRET }}" \
+            --max-time 300)
+          echo "HTTP $code"
+          cat response.json || true
+          if [ "$code" -lt 200 ] || [ "$code" -ge 300 ]; then
+            echo "::error::Ingest request failed with HTTP $code"
+            exit 1
+          fi

@@ -1,27 +1,13 @@
 import express from "express";
 import path from "path";
 import { createServer as createViteServer } from "vite";
-import { GoogleGenAI, Type } from "@google/genai";
 import dotenv from "dotenv";
+import { getGeminiClient, fetchWithRetry, extractJsonLdEvents } from "./serverLib";
+import { runIngest, getLastIngestMeta } from "./ingest";
 
 dotenv.config();
 
 const PORT = 3000;
-
-function getGeminiClient(clientApiKey?: string) {
-  const apiKey = clientApiKey || process.env.GEMINI_API_KEY;
-  if (!apiKey) {
-    throw new Error("GEMINI_API_KEY environment variable is required or must be supplied in headers/settings.");
-  }
-  return new GoogleGenAI({
-    apiKey: apiKey,
-    httpOptions: {
-      headers: {
-        'User-Agent': 'aistudio-build',
-      }
-    }
-  });
-}
 
 function getOfflineFallbackEvents(searchQuery: string = "") {
   const qClean = searchQuery.toLowerCase();
@@ -154,111 +140,6 @@ function getOfflineFallbackEvents(searchQuery: string = "") {
 // In-memory cache for parsed URL results to avoid re-hitting sites/LLM (rate-limit friendly)
 const parseUrlCache = new Map<string, { ts: number; events: any[] }>();
 const PARSE_CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
-
-async function fetchWithRetry(url: string, options: any = {}, retries = 2): Promise<Response> {
-  let lastErr: any;
-  for (let attempt = 0; attempt <= retries; attempt++) {
-    try {
-      return await fetch(url, options);
-    } catch (err) {
-      lastErr = err;
-      if (attempt < retries) {
-        await new Promise((r) => setTimeout(r, 400 * Math.pow(2, attempt)));
-      }
-    }
-  }
-  throw lastErr;
-}
-
-function categorizeEvent(title: string, description: string): string {
-  const hay = `${title || ""} ${description || ""}`.toLowerCase();
-  if (/(philharmonic|opera|symphony|orchestra|chamber|recital|classical|quartet)/.test(hay)) return "classical";
-  if (/(broadway|theater|theatre|\bplay\b|musical|comedy|drama|cabaret)/.test(hay)) return "broadway";
-  if (/(\bvs\.?\b|yankees|mets|knicks|nets|rangers|liberty|\bgame\b|stadium|playoff|nba|nfl|nhl|mlb)/.test(hay)) return "sports";
-  if (/(concert|music|jazz|festival|\bband\b|\blive\b|\bdj\b|rock|hip.?hop|set)/.test(hay)) return "concerts";
-  return "other";
-}
-
-// Deterministically parse schema.org/JSON-LD Event markup from a page (no API key needed).
-function extractJsonLdEvents(html: string, sourceUrl: string): any[] {
-  const events: any[] = [];
-  const scriptRegex = /<script[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi;
-  const blobs: any[] = [];
-  let match;
-  while ((match = scriptRegex.exec(html)) !== null) {
-    try {
-      blobs.push(JSON.parse(match[1].trim()));
-    } catch (_) {
-      // Some sites concatenate multiple JSON objects; ignore unparseable blocks.
-    }
-  }
-
-  const visit = (node: any) => {
-    if (!node || typeof node !== "object") return;
-    if (Array.isArray(node)) { node.forEach(visit); return; }
-    if (node["@graph"]) visit(node["@graph"]);
-    if (node.subEvent) visit(node.subEvent);
-
-    const rawType = node["@type"];
-    const types = Array.isArray(rawType) ? rawType : [rawType];
-    const isEvent = types.some((t: any) => typeof t === "string" && /Event/i.test(t));
-    if (!isEvent || !node.name) return;
-
-    let date = "";
-    let time = "19:00";
-    if (node.startDate) {
-      const dt = new Date(node.startDate);
-      if (!isNaN(dt.getTime())) {
-        // Use a consistent UTC instant for both date and time so the client
-        // (which stores `${date}T${time}:00Z`) reconstructs the correct moment.
-        const iso = dt.toISOString();
-        date = iso.split("T")[0];
-        time = iso.split("T")[1].slice(0, 5);
-      }
-    }
-
-    let venue = "NYC Venue";
-    if (typeof node.location === "string") venue = node.location;
-    else if (node.location?.name) venue = node.location.name;
-    else if (node.location?.address?.addressLocality) venue = node.location.address.addressLocality;
-
-    let price = "Check Site";
-    const offers = Array.isArray(node.offers) ? node.offers[0] : node.offers;
-    if (offers) {
-      const p = offers.lowPrice ?? offers.price;
-      if (p !== undefined && p !== null && `${p}`.trim() !== "") {
-        const cur = !offers.priceCurrency || offers.priceCurrency === "USD" ? "$" : "";
-        price = Number(p) === 0 ? "Free" : `${cur}${p}`;
-      }
-    }
-
-    const performer = Array.isArray(node.performer) ? node.performer[0] : node.performer;
-    const desc = typeof node.description === "string" ? node.description.replace(/<[^>]+>/g, "").trim().slice(0, 400) : "";
-
-    events.push({
-      title: typeof node.name === "string" ? node.name.trim() : String(node.name),
-      artist: performer?.name || "",
-      venue,
-      category: categorizeEvent(node.name, node.description || ""),
-      date,
-      time,
-      price,
-      ticketUrl: node.url || offers?.url || sourceUrl,
-      description: desc,
-    });
-  };
-
-  blobs.forEach(visit);
-  // Only keep events with a resolvable date; de-dupe by title+date.
-  const seen = new Set<string>();
-  return events.filter((e) => {
-    if (!e.date) return false;
-    const key = `${e.title.toLowerCase()}_${e.date}`;
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  }).slice(0, 25);
-}
 
 async function startServer() {
   const app = express();
@@ -683,6 +564,43 @@ Ensure all keys are formatted perfectly in JSON. Do not return any backticks or 
       return res.status(400).json({ success: false, error: "Unavailable action" });
     } catch (err: any) {
       console.error("Unhandle server-side proxy exception:", err);
+      return res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // --- SCHEDULED INGEST: run the scraper and write events to Firestore. ---
+  // Triggered by the GitHub Actions cron (must send the shared secret header).
+  app.post("/api/ingest", async (req, res) => {
+    const secret = process.env.INGEST_SECRET;
+    const provided = (req.headers["x-ingest-secret"] as string) || req.body?.secret;
+    if (!secret || provided !== secret) {
+      return res.status(401).json({ success: false, error: "Unauthorized" });
+    }
+    try {
+      const summary = await runIngest();
+      return res.status(200).json({ success: true, ...summary });
+    } catch (err: any) {
+      console.error("Ingest failed:", err);
+      return res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // --- MANUAL REFRESH: lets the UI trigger an ingest, globally throttled so it
+  // can be called without the secret without enabling abuse. ---
+  let lastRefreshTs = 0;
+  const REFRESH_THROTTLE_MS = 5 * 60 * 1000;
+  app.post("/api/refresh", async (_req, res) => {
+    const now = Date.now();
+    if (now - lastRefreshTs < REFRESH_THROTTLE_MS) {
+      const meta = await getLastIngestMeta();
+      return res.status(200).json({ success: true, throttled: true, meta });
+    }
+    lastRefreshTs = now;
+    try {
+      const summary = await runIngest();
+      return res.status(200).json({ success: true, throttled: false, ...summary });
+    } catch (err: any) {
+      console.error("Refresh ingest failed:", err);
       return res.status(500).json({ success: false, error: err.message });
     }
   });

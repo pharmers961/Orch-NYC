@@ -28,7 +28,7 @@ import {
 } from "lucide-react";
 import { EventItem, EventCategory, AppState } from "./types";
 import { onAuthStateChanged, signInWithPopup, signOut } from "firebase/auth";
-import { doc, getDoc, setDoc, serverTimestamp } from "firebase/firestore";
+import { doc, getDoc, setDoc, serverTimestamp, collection, query, where, orderBy, limit, onSnapshot } from "firebase/firestore";
 import { auth, db, googleProvider } from "./firebase";
 
 // Seed data as fallback? The brief says: "NO sample/fake fallback. Only real live events." 
@@ -517,10 +517,8 @@ export default function App() {
     return () => clearInterval(interval);
   }, [autoRefresh, ticketmasterKey]);
 
-  // Fetch initial data on load
+  // Ensure sample seeds exist so the app is never empty on first run (badged "Sample").
   useEffect(() => {
-    // Check if WNYC or Google Events exist in the current events state.
-    // Specifying self-healing seeds to always guarantee their visibility.
     const hasGoogle = events.some((e) => e.source === "google.com/events");
     const hasWnyc = events.some((e) => e.source === "wnyc.org");
     if (!hasGoogle || !hasWnyc) {
@@ -535,18 +533,71 @@ export default function App() {
         return combined;
       });
     }
+  }, []);
 
-    if (events.length === 0) {
+  // Primary data path: read shared events live from Firestore. The scheduled
+  // ingest job keeps this collection fresh, so the browser no longer has to
+  // scrape on every visit. If the DB is empty or unreachable (e.g. the backend
+  // isn't set up yet), gracefully fall back to the legacy client-side fetch.
+  const firstSnapshotHandledRef = useRef(false);
+  useEffect(() => {
+    const cutoff = Date.now() - 24 * 60 * 60 * 1000; // include events from today onward
+    const runLegacyFallback = () => {
       fetchTicketmaster(false);
-    }
-    // Pull NYC Google Events automatically on launch
-    fetchGoogleEvents("popular events");
+      fetchGoogleEvents("popular events");
+      if (userSources.length > 0) syncAllCustomSources();
+    };
 
-    // Auto-import any saved custom sources (e.g. wnyc.org) on launch so their
-    // events appear on the calendar without a manual "Sync All" or sign-in.
-    if (userSources.length > 0) {
-      syncAllCustomSources();
+    let unsub = () => {};
+    try {
+      const q = query(
+        collection(db, "events"),
+        where("startTs", ">=", cutoff),
+        orderBy("startTs", "asc"),
+        limit(800)
+      );
+      unsub = onSnapshot(
+        q,
+        (snap) => {
+          if (!snap.empty) {
+            const dbEvents: EventItem[] = snap.docs.map((d) => {
+              const x = d.data() as any;
+              return {
+                id: d.id,
+                title: x.title,
+                artist: x.artist || "",
+                venue: x.venue || "NYC Venue",
+                area: x.area || "New York",
+                cat: x.cat || "other",
+                price: x.price || "Check Site",
+                start: x.start,
+                desc: x.desc || "",
+                ticketUrl: x.ticketUrl || "",
+                image: x.image || "",
+                status: x.status,
+                source: x.source || "",
+                provider: x.provider || "Gemini",
+                added: x.lastSeen || Date.now(),
+                tags: [],
+              };
+            });
+            mergeAndDeDuplicate(dbEvents);
+            setLastUpdated(new Date());
+          } else if (!firstSnapshotHandledRef.current) {
+            runLegacyFallback();
+          }
+          firstSnapshotHandledRef.current = true;
+        },
+        (err) => {
+          console.warn("Firestore events subscription failed; using legacy fetch.", err?.message);
+          if (!firstSnapshotHandledRef.current) runLegacyFallback();
+          firstSnapshotHandledRef.current = true;
+        }
+      );
+    } catch (err) {
+      runLegacyFallback();
     }
+    return () => unsub();
   }, []);
 
   // --- NORMALIZE & DE-DUPLICATE ENGINE ---
