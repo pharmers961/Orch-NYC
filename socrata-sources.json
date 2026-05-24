@@ -1,0 +1,21 @@
+{
+  "_comment": "NYC Open Data (Socrata) datasets pulled via the SODA API. Add an entry per dataset: id is the 4x4 from the dataset's API endpoint (data.cityofnewyork.us/resource/<id>.json). Field names are auto-detected if omitted. A wrong id just yields 0 events (logged), never breaks the run.",
+  "datasets": [
+    {
+      "id": "fudw-fgrp",
+      "source": "nyc parks (open data)",
+      "titleField": "title",
+      "dateField": "start_date_time",
+      "descField": "snippet",
+      "urlField": "event_url",
+      "category": "other",
+      "price": "Free"
+    },
+    {
+      "id": "gs56-euca",
+      "source": "broadway calendar (open data)",
+      "category": "broadway",
+      "price": "Check Site"
+    }
+  ]
+}

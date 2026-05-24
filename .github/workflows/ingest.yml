@@ -10,7 +10,7 @@ name: Scheduled event ingest
 
 on:
   schedule:
-    - cron: "0 * * * *" # hourly, on the hour (UTC)
+    - cron: "0 */4 * * *" # 6x daily, every 4 hours (00,04,08,12,16,20 UTC)
   workflow_dispatch: {} # allow manual "Run workflow" from the Actions tab
 
 permissions:
@@ -38,6 +38,8 @@ jobs:
         env:
           TICKETMASTER_KEY: ${{ secrets.TICKETMASTER_KEY }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          SERPAPI_KEY: ${{ secrets.SERPAPI_KEY }}
+          SOCRATA_APP_TOKEN: ${{ secrets.SOCRATA_APP_TOKEN }}
         run: npx tsx scripts/ingest.ts
 
       - name: Publish events.json to data branch
