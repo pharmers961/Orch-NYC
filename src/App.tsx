@@ -975,7 +975,7 @@ export default function App() {
               in New York.
             </h1>
             <p className="text-slate-500 dark:text-zinc-400 text-sm max-w-lg">
-              Live events fully aggregated from Ticketmaster, live Google Searches (via SerpApi/Gemini), and custom local sources in a unified, interactive custom calendar.
+              Live events for things that Malu wants to go see and do while living in the Big Apple.
             </p>
           </div>
 
