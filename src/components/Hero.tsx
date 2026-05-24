@@ -23,9 +23,6 @@ export function Hero({ stats }: { stats: { events: number; venues: number; sourc
           <span className="text-emerald-600 dark:text-emerald-500 font-bold">L</span>ineup{" "}
           <span className="text-emerald-600 dark:text-emerald-500 font-bold">U</span>nforgettable.
         </p>
-        <p className="text-slate-500 dark:text-zinc-400 text-sm max-w-lg">
-          Live events for things that Malu wants to go see and do while living in the Big Apple.
-        </p>
       </div>
 
       <div className="flex flex-wrap items-center gap-3 text-xs font-medium text-slate-500 dark:text-zinc-400">
