@@ -118,6 +118,20 @@ export function getBorough(area: string, venue: string): string {
   return "Other";
 }
 
+// Safety net: if a feed event's date is in the past (a scraper/AI year mistake),
+// roll it forward to the next occurrence of that month/day so it isn't hidden.
+export function rollStartForward(startIso: string): string {
+  const d = new Date(startIso);
+  if (isNaN(d.getTime())) return startIso;
+  const now = new Date();
+  now.setHours(0, 0, 0, 0);
+  if (d.getTime() >= now.getTime()) return startIso;
+  const cand = new Date(d);
+  cand.setFullYear(now.getFullYear());
+  if (cand.getTime() < now.getTime()) cand.setFullYear(now.getFullYear() + 1);
+  return cand.toISOString();
+}
+
 // Local-timezone YYYY-MM-DD key so calendar cells match what the list view shows.
 export function localDateKey(d: Date): string {
   const y = d.getFullYear();
@@ -364,7 +378,7 @@ export default function App() {
           area: x.area || "New York",
           cat: x.cat || "other",
           price: x.price || "Check Site",
-          start: x.start,
+          start: rollStartForward(x.start),
           desc: x.desc || x.description || "",
           ticketUrl: x.ticketUrl || x.sourceUrl || "",
           image: x.image || "",
