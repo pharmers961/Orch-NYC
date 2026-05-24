@@ -26,6 +26,18 @@ function readSources(): string[] {
   }
 }
 
+// The previous feed (downloaded by the workflow into prev-events.json) so the
+// feed accumulates across runs instead of being rebuilt from scratch.
+function readPrevEvents(): any[] {
+  try {
+    const raw = readFileSync(path.join(ROOT, "prev-events.json"), "utf8");
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed?.events) ? parsed.events : [];
+  } catch {
+    return [];
+  }
+}
+
 function hostOf(url: string): string {
   try {
     let s = url.trim();
@@ -202,16 +214,21 @@ async function main() {
     }
   }
 
-  // Drop past events (keep a 1-day grace window), then de-dupe by id.
+  // Accumulate: merge with the previous feed so events captured in earlier runs
+  // persist even when a flaky AI extraction returns nothing this run. Fresh
+  // scrape results win on id collisions (so details/dates stay current).
+  const prev = readPrevEvents();
   const cutoff = Date.now() - 24 * 60 * 60 * 1000;
   const byId = new Map<string, any>();
-  all.filter((e) => e.startTs >= cutoff).forEach((e) => byId.set(e.id, e));
+  [...prev, ...all]
+    .filter((e) => typeof e?.startTs === "number" && e.startTs >= cutoff)
+    .forEach((e) => byId.set(e.id, e));
   const events = [...byId.values()].sort((a, b) => a.startTs - b.startTs);
 
   const payload = {
     generatedAt: new Date().toISOString(),
     count: events.length,
-    perSource,
+    perSourceThisRun: perSource,
     events,
   };
   writeFileSync(OUT_FILE, JSON.stringify(payload, null, 2));

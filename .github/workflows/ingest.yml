@@ -31,6 +31,9 @@ jobs:
       - name: Install deps
         run: npm ci
 
+      - name: Load current feed (so the feed accumulates across runs)
+        run: curl -fsSL "https://raw.githubusercontent.com/${{ github.repository }}/data/events.json" -o prev-events.json || true
+
       - name: Scrape events
         env:
           TICKETMASTER_KEY: ${{ secrets.TICKETMASTER_KEY }}
