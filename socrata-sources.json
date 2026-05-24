@@ -10,12 +10,6 @@
       "urlField": "event_url",
       "category": "other",
       "price": "Free"
-    },
-    {
-      "id": "gs56-euca",
-      "source": "broadway calendar (open data)",
-      "category": "broadway",
-      "price": "Check Site"
     }
   ]
 }
