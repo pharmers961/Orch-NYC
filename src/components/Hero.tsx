@@ -11,6 +11,18 @@ export function Hero({ stats }: { stats: { events: number; venues: number; sourc
           Everything happening <br className="hidden sm:inline" />
           in New York.
         </h1>
+        <p className="text-lg font-bold tracking-tight text-slate-800 dark:text-zinc-200 font-display">
+          Orchestrate the chaos.
+        </p>
+        <p
+          className="text-slate-600 dark:text-zinc-300 text-sm font-medium mb-2 cursor-default"
+          title="M.A.L.U. — made for you, Malu ♥"
+        >
+          <span className="text-emerald-600 dark:text-emerald-500 font-bold">M</span>ake{" "}
+          <span className="text-emerald-600 dark:text-emerald-500 font-bold">A</span>{" "}
+          <span className="text-emerald-600 dark:text-emerald-500 font-bold">L</span>ineup{" "}
+          <span className="text-emerald-600 dark:text-emerald-500 font-bold">U</span>nforgettable.
+        </p>
         <p className="text-slate-500 dark:text-zinc-400 text-sm max-w-lg">
           Live events for things that Malu wants to go see and do while living in the Big Apple.
         </p>
