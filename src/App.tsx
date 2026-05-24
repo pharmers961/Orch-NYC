@@ -905,14 +905,14 @@ export default function App() {
   }, [events, savedIds]);
 
   return (
-    <div className="min-h-screen bg-slate-50 dark:bg-[#000000] text-slate-900 dark:text-zinc-100 transition-colors duration-300 flex flex-col antialiased">
+    <div className="min-h-screen overflow-x-hidden bg-slate-50 dark:bg-[#000000] text-slate-900 dark:text-zinc-100 transition-colors duration-300 flex flex-col antialiased">
       {/* Top loading indicator while the feed loads */}
       {loading && (
         <div className="fixed top-0 left-0 right-0 h-1 z-[110] bg-gradient-to-r from-blue-500 to-indigo-600 animate-pulse" />
       )}
 
       {/* STICKY GLASS NAVIGATION BAR */}
-      <nav id="glass-nav" className="sticky top-0 z-50 h-14 flex items-center justify-between px-6 bg-white/70 dark:bg-black/70 backdrop-blur-xl border-b border-black/10 dark:border-zinc-800/60 font-sans">
+      <nav id="glass-nav" className="sticky top-0 z-50 h-14 flex items-center justify-between gap-2 px-4 sm:px-6 bg-white/70 dark:bg-black/70 backdrop-blur-xl border-b border-black/10 dark:border-zinc-800/60 font-sans">
         <div className="flex items-center gap-3">
           <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-[#0071e3] to-[#5e5ce6] flex items-center justify-center shadow-md">
             <span className="text-white font-bold text-lg leading-none font-display">O</span>
@@ -955,7 +955,7 @@ export default function App() {
         </div>
       </nav>
 
-      <div className="max-w-7xl mx-auto w-full px-6 flex-1 flex flex-col md:grid md:grid-cols-[260px_1fr] lg:grid-cols-[280px_1fr] gap-8 pb-16">
+      <div className="max-w-7xl mx-auto w-full px-4 sm:px-6 flex-1 flex flex-col md:grid md:grid-cols-[260px_minmax(0,1fr)] lg:grid-cols-[280px_minmax(0,1fr)] gap-8 pb-16">
         {/* HERO HEADER */}
         <header className="col-span-full pt-8 pb-4 flex flex-col md:flex-row md:items-end md:justify-between gap-4">
           <div>
@@ -1478,7 +1478,7 @@ export default function App() {
         </aside>
 
         {/* --- MAIN CONTENT WINDOWS --- */}
-        <main className="space-y-6">
+        <main className="space-y-6 min-w-0">
           {events.length === 0 && !loading && (
             <div className="p-8 sm:p-12 rounded-2xl bg-white/60 dark:bg-zinc-950/60 backdrop-blur-sm border border-slate-200/60 dark:border-zinc-800 text-center">
               <Sparkles size={32} className="text-indigo-500 mx-auto mb-4" />
@@ -2264,7 +2264,7 @@ export default function App() {
       )}
 
       {/* --- STICKY FOOTER --- */}
-      <footer className="mt-auto h-12 bg-white/70 dark:bg-black/70 backdrop-blur-xl border-t border-black/10 dark:border-zinc-800/60 flex items-center px-6 justify-between text-[11px] text-slate-400 dark:text-zinc-500 select-none">
+      <footer className="mt-auto h-12 bg-white/70 dark:bg-black/70 backdrop-blur-xl border-t border-black/10 dark:border-zinc-800/60 flex items-center px-4 sm:px-6 justify-between gap-2 text-[11px] text-slate-400 dark:text-zinc-500 select-none">
         <div className="font-bold uppercase tracking-wider font-mono">
           Orch • Real Time Sync
         </div>
