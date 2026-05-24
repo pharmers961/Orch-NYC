@@ -3,7 +3,15 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-export type EventCategory = "classical" | "broadway" | "concerts" | "sports" | "other";
+export type EventCategory =
+  | "classical"
+  | "broadway"
+  | "concerts"
+  | "sports"
+  | "arts"
+  | "dance"
+  | "talks"
+  | "other";
 
 export interface EventItem {
   id: string; // unique ID

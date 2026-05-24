@@ -9,7 +9,7 @@
 import { writeFileSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
-import { fetchWithRetry, extractJsonLdEvents, geminiExtractEventsFromUrl, categorizeEvent } from "../serverLib";
+import { fetchWithRetry, extractJsonLdEvents, geminiExtractEventsFromUrl, categorizeEvent, PRICE_FALLBACK } from "../serverLib";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, "..");
@@ -108,7 +108,7 @@ function dedupeKey(title: string, dateStr: string): string {
   return key || `evt_${Math.random().toString(36).slice(2, 10)}`;
 }
 
-const VALID_CATS = ["concerts", "broadway", "classical", "sports", "other"];
+const VALID_CATS = ["concerts", "broadway", "classical", "sports", "arts", "dance", "talks", "other"];
 
 function normalizeEvent(raw: any, sourceUrl: string, provider: string, sourceHost?: string) {
   const cat = VALID_CATS.includes((raw.category || "").toLowerCase()) ? raw.category.toLowerCase() : "other";
@@ -123,7 +123,7 @@ function normalizeEvent(raw: any, sourceUrl: string, provider: string, sourceHos
     venue: raw.venue || "NYC Venue",
     area: raw.area || "New York",
     cat,
-    price: raw.price || "Check Site",
+    price: raw.price || PRICE_FALLBACK,
     start,
     startTs: isNaN(startTs) ? Date.now() : startTs,
     desc: raw.description || raw.desc || "",
@@ -142,9 +142,10 @@ function mapTmEvent(e: any) {
   if (c?.segment?.name === "Sports") category = "sports";
   else if (c?.segment?.name === "Music") category = "concerts";
   else if (["Classical", "Opera", "Orchestral"].includes(c?.genre?.name)) category = "classical";
+  else if (c?.genre?.name === "Dance") category = "dance";
   else category = "broadway";
   const venue = e._embedded?.venues?.[0]?.name || "NYC Venue";
-  let price = "Price TBA";
+  let price = PRICE_FALLBACK;
   if (e.priceRanges?.[0]) {
     const min = Math.round(e.priceRanges[0].min || 0);
     const max = Math.round(e.priceRanges[0].max || 0);
@@ -304,16 +305,20 @@ async function fetchSocrata(cfg: SocrataCfg, appToken?: string): Promise<any[]> 
     const venue = pickField(row, cfg.venueField, ["venue", "location", "park_name", "place", "address", "borough", "site"]);
     const desc = pickField(row, cfg.descField, ["snippet", "description", "summary", "details", "event_description"]);
     const link = pickField(row, cfg.urlField, ["event_url", "url", "link", "website", "permalink", "tickets"]);
+    const venueStr = venue ? String(venue) : "New York";
+    const descStr = typeof desc === "string" ? desc.replace(/<[^>]+>/g, "").trim().slice(0, 400) : "";
+    // Auto-categorize from the content; fall back to the dataset's hint only if unknown.
+    const guessedCat = categorizeEvent(String(title), descStr, venueStr);
     out.push({
       title: String(title).trim(),
       artist: "",
-      venue: venue ? String(venue) : "New York",
-      category: cfg.category || "other",
+      venue: venueStr,
+      category: guessedCat !== "other" ? guessedCat : cfg.category || "other",
       date: iso.split("T")[0],
       time: iso.split("T")[1].slice(0, 5),
-      price: cfg.price || "Check Site",
+      price: cfg.price || PRICE_FALLBACK,
       ticketUrl: typeof link === "string" && link ? link : `https://data.cityofnewyork.us/d/${cfg.id}`,
-      description: typeof desc === "string" ? desc.replace(/<[^>]+>/g, "").trim().slice(0, 400) : "",
+      description: descStr,
     });
   }
   return out;
@@ -356,10 +361,10 @@ async function fetchSerpApi(key: string): Promise<any[]> {
       title: e.title,
       artist: "",
       venue,
-      category: categorizeEvent(e.title || "", e.description || ""),
+      category: categorizeEvent(e.title || "", e.description || "", typeof venue === "string" ? venue : ""),
       date: dateVal,
       time: timeVal,
-      price: e.ticket_info?.[0]?.price || "Check Site",
+      price: e.ticket_info?.[0]?.price || PRICE_FALLBACK,
       ticketUrl: ticketUrl || `https://www.google.com/search?q=${encodeURIComponent(e.title)}`,
       description: e.description || "",
     });

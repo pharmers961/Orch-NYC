@@ -30,11 +30,29 @@ export async function fetchWithRetry(url: string, options: any = {}, retries = 2
   throw lastErr;
 }
 
-export function categorizeEvent(title: string, description: string): string {
+// Shared fallback shown when no price could be determined.
+export const PRICE_FALLBACK = "Check site";
+
+// Best-effort categorization. Venue is the strongest signal for curated
+// single-genre venues, so it's checked first; then keyword rules run from the
+// most specific category to the most general.
+export function categorizeEvent(title: string, description: string, venue = ""): string {
   const hay = `${title || ""} ${description || ""}`.toLowerCase();
-  if (/(philharmonic|opera|symphony|orchestra|chamber|recital|classical|quartet)/.test(hay)) return "classical";
-  if (/(broadway|theater|theatre|\bplay\b|musical|comedy|drama|cabaret)/.test(hay)) return "broadway";
+  const v = (venue || "").toLowerCase();
+
+  // Venue rules (only for venues that are reliably one genre).
+  if (/(carnegie hall|metropolitan opera|met opera|alice tully|david geffen hall|nyphil|new york philharmonic)/.test(v)) return "classical";
+  if (/(blue note|bowery ballroom|brooklyn steel)/.test(v)) return "concerts";
+  if (/(public theater|playbill|broadway)/.test(v)) return "broadway";
+  if (/(\bmoma\b|museum|gallery|guggenheim|whitney)/.test(v)) return "arts";
+
+  // Keyword rules, specific -> general.
   if (/(\bvs\.?\b|yankees|mets|knicks|nets|rangers|liberty|\bgame\b|stadium|playoff|nba|nfl|nhl|mlb)/.test(hay)) return "sports";
+  if (/(philharmonic|opera|symphony|orchestra|chamber|recital|classical|quartet|sonata|concerto)/.test(hay)) return "classical";
+  if (/(ballet|\bdance\b|choreograph|nutcracker|\btap\b)/.test(hay)) return "dance";
+  if (/(lecture|\btalk\b|\breading\b|conversation|\bpanel\b|podcast|\bauthor\b|symposium|seminar|q&a|live taping|radiolab|book launch)/.test(hay)) return "talks";
+  if (/(exhibit|exhibition|gallery|museum|installation|retrospective|sculpture|painting|photography)/.test(hay)) return "arts";
+  if (/(broadway|theater|theatre|\bplay\b|musical|comedy|drama|cabaret|improv|stand.?up)/.test(hay)) return "broadway";
   if (/(concert|music|jazz|festival|\bband\b|\blive\b|\bdj\b|rock|hip.?hop|set)/.test(hay)) return "concerts";
   return "other";
 }
@@ -82,13 +100,38 @@ export function extractJsonLdEvents(html: string, sourceUrl: string): any[] {
     else if (node.location?.name) venue = node.location.name;
     else if (node.location?.address?.addressLocality) venue = node.location.address.addressLocality;
 
-    let price = "Check Site";
-    const offers = Array.isArray(node.offers) ? node.offers[0] : node.offers;
-    if (offers) {
-      const p = offers.lowPrice ?? offers.price;
-      if (p !== undefined && p !== null && `${p}`.trim() !== "") {
-        const cur = !offers.priceCurrency || offers.priceCurrency === "USD" ? "$" : "";
-        price = Number(p) === 0 ? "Free" : `${cur}${p}`;
+    // Gather price across all offers so we can emit a real range, not just the
+    // first low price. `lowPrice` implies a "from" price; `highPrice` closes a range.
+    const offersArr = Array.isArray(node.offers) ? node.offers : node.offers ? [node.offers] : [];
+    const lows: number[] = [];
+    const highs: number[] = [];
+    let currency = "USD";
+    let sawLow = false;
+    let sawHigh = false;
+    for (const o of offersArr) {
+      if (!o) continue;
+      if (o.priceCurrency) currency = o.priceCurrency;
+      const lowRaw = o.lowPrice ?? o.price;
+      if (lowRaw != null && `${lowRaw}`.trim() !== "" && !isNaN(Number(lowRaw))) {
+        lows.push(Number(lowRaw));
+        if (o.lowPrice != null) sawLow = true;
+      }
+      if (o.highPrice != null && `${o.highPrice}`.trim() !== "" && !isNaN(Number(o.highPrice))) {
+        highs.push(Number(o.highPrice));
+        sawHigh = true;
+      }
+    }
+    let price = PRICE_FALLBACK;
+    if (lows.length) {
+      const cur = currency === "USD" ? "$" : "";
+      const min = Math.min(...lows);
+      if (sawHigh && highs.length) {
+        const max = Math.max(...highs);
+        price = max > min ? `${cur}${min}–${cur}${max}` : min === 0 ? "Free" : `${cur}${min}`;
+      } else if (sawLow) {
+        price = min === 0 ? "Free" : `${cur}${min}+`;
+      } else {
+        price = min === 0 ? "Free" : `${cur}${min}`;
       }
     }
 
@@ -99,11 +142,11 @@ export function extractJsonLdEvents(html: string, sourceUrl: string): any[] {
       title: typeof node.name === "string" ? node.name.trim() : String(node.name),
       artist: performer?.name || "",
       venue,
-      category: categorizeEvent(node.name, node.description || ""),
+      category: categorizeEvent(node.name, node.description || "", venue),
       date,
       time,
       price,
-      ticketUrl: node.url || offers?.url || sourceUrl,
+      ticketUrl: node.url || offersArr[0]?.url || sourceUrl,
       description: desc,
     });
   };
@@ -125,7 +168,7 @@ export const EVENT_JSON_SCHEMA_HINT = `Each event in the array MUST strictly fol
   "title": "Clean event title",
   "artist": "Leading artist or sports team name",
   "venue": "Venue name in NYC or nearby",
-  "category": "One of: classical, broadway, concerts, sports, other",
+  "category": "One of: classical, broadway, concerts, sports, arts, dance, talks, other",
   "date": "YYYY-MM-DD",
   "time": "HH:MM 24h format, e.g. 19:30",
   "price": "e.g. Free, $45+ or $60-$120",
