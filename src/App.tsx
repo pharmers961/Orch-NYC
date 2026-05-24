@@ -195,7 +195,9 @@ export default function App() {
   const [googleEventsQuery, setGoogleEventsQuery] = useState("");
   const [searchingGoogleEvents, setSearchingGoogleEvents] = useState(false);
   const [googleEventsSuccessNote, setGoogleEventsSuccessNote] = useState<string | null>(null);
-  const [dateFilter, setDateFilter] = useState<"all" | "today" | "weekend" | "week" | "month">("all");
+  const [dateFilter, setDateFilter] = useState<"all" | "today" | "weekend" | "week" | "month" | "custom">("all");
+  const [customStart, setCustomStart] = useState("");
+  const [customEnd, setCustomEnd] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
   const [viewMode, setViewMode] = useState<"list" | "calendar" | "plan">("list");
   const [calendarView, setCalendarView] = useState<"month" | "week" | "agenda">("month");
@@ -973,6 +975,17 @@ export default function App() {
             thirtyDaysLater.setDate(today.getDate() + 30);
             thirtyDaysLater.setHours(23, 59, 59, 999);
             if (evDate < today || evDate > thirtyDaysLater) return false;
+          } else if (dateFilter === "custom") {
+            // User-chosen start/end (either bound optional). Shows past events too if asked.
+            if (customStart) {
+              const start = new Date(`${customStart}T00:00:00`);
+              if (evDate < start) return false;
+            }
+            if (customEnd) {
+              const end = new Date(`${customEnd}T23:59:59`);
+              if (evDate > end) return false;
+            }
+            if (!customStart && !customEnd && evDate < today) return false;
           } else {
             // All upcoming (filter out past events)
             if (evDate < today) return false;
@@ -1005,7 +1018,7 @@ export default function App() {
         }
         return 0;
       });
-  }, [events, selectedCategories, selectedSources, selectedVenues, selectedBoroughs, maxPrice, freeOnly, savedOnly, savedIds, searchQuery, dateFilter, sortBy, selectedTags, viewMode]);
+  }, [events, selectedCategories, selectedSources, selectedVenues, selectedBoroughs, maxPrice, freeOnly, savedOnly, savedIds, searchQuery, dateFilter, customStart, customEnd, sortBy, selectedTags, viewMode]);
 
   function parseLowestNumericPrice(priceStr: string): number {
     if (priceStr.toLowerCase().includes("tba") || priceStr.toLowerCase().includes("free")) return 0;
@@ -1582,6 +1595,46 @@ export default function App() {
             >
               This month
             </button>
+            <button
+              onClick={() => { setDateFilter("custom"); setSavedOnly(false); }}
+              className={`px-3 py-1.5 text-xs font-semibold rounded-full transition-all ${
+                dateFilter === "custom" && !savedOnly
+                  ? "bg-slate-900 text-white dark:bg-zinc-100 dark:text-black"
+                  : "bg-white dark:bg-zinc-950 border border-slate-200 dark:border-zinc-800 hover:bg-slate-100 dark:hover:bg-zinc-900"
+              }`}
+            >
+              Custom range
+            </button>
+
+            {dateFilter === "custom" && (
+              <div className="flex items-center gap-1.5 pl-1">
+                <input
+                  type="date"
+                  value={customStart}
+                  onChange={(e) => setCustomStart(e.target.value)}
+                  className="px-2 py-1 text-xs rounded-lg border border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-950 text-slate-700 dark:text-zinc-300 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                  aria-label="Start date"
+                />
+                <span className="text-slate-400 text-xs">→</span>
+                <input
+                  type="date"
+                  value={customEnd}
+                  min={customStart || undefined}
+                  onChange={(e) => setCustomEnd(e.target.value)}
+                  className="px-2 py-1 text-xs rounded-lg border border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-950 text-slate-700 dark:text-zinc-300 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                  aria-label="End date"
+                />
+                {(customStart || customEnd) && (
+                  <button
+                    onClick={() => { setCustomStart(""); setCustomEnd(""); }}
+                    className="text-slate-400 hover:text-slate-600 dark:hover:text-zinc-300 p-1"
+                    title="Clear range"
+                  >
+                    <X size={12} />
+                  </button>
+                )}
+              </div>
+            )}
 
             <div className="w-px h-6 bg-slate-200 dark:bg-zinc-800 mx-1"></div>
 
@@ -2063,7 +2116,7 @@ export default function App() {
                   <div
                     key={item.id}
                     onClick={() => setSelectedEventId(item.id)}
-                    className="event-card group bg-white/60 dark:bg-zinc-950/60 backdrop-blur-md rounded-2xl p-4 flex items-center gap-4 lg:gap-6 border border-slate-200/40 dark:border-zinc-800/50 shadow-sm hover:shadow-md hover:border-slate-300 dark:hover:border-zinc-700/80 transition-all duration-200 hover:-translate-y-0.5 cursor-pointer relative"
+                    className="event-card group bg-white/60 dark:bg-zinc-950/60 backdrop-blur-md rounded-2xl p-4 pl-5 flex flex-wrap items-center gap-3 sm:gap-4 border border-slate-200/40 dark:border-zinc-800/50 shadow-sm hover:shadow-md hover:border-slate-300 dark:hover:border-zinc-700/80 transition-all duration-200 hover:-translate-y-0.5 cursor-pointer relative overflow-hidden"
                   >
                     {/* Left category accent stripe */}
                     <div
@@ -2147,13 +2200,13 @@ export default function App() {
                       </div>
                     </div>
 
-                    {/* Pricing / Booking Actions Column */}
-                    <div className="text-right flex flex-col items-end gap-2 pr-2 shrink-0">
-                      <span className="text-emerald-600 dark:text-emerald-500 font-extrabold text-sm sm:text-base font-mono">
+                    {/* Pricing / Booking Actions Column (wraps to a full-width row on mobile) */}
+                    <div className="w-full sm:w-auto order-last flex sm:flex-col items-center sm:items-end justify-between gap-2 sm:pr-2 sm:shrink-0 mt-1 pt-3 sm:mt-0 sm:pt-0 border-t border-slate-100 dark:border-zinc-800/60 sm:border-0">
+                      <span className="order-1 text-emerald-600 dark:text-emerald-500 font-extrabold text-sm sm:text-base font-mono">
                         {item.price}
                       </span>
 
-                      <div className="flex items-center gap-1 sm:gap-2">
+                      <div className="order-3 sm:order-2 flex items-center gap-1 sm:gap-2">
                         {/* Save Trigger heart */}
                         <button
                           onClick={(e) => toggleSave(item.id, e)}
@@ -2180,7 +2233,7 @@ export default function App() {
 
                       <button
                         onClick={(e) => { e.stopPropagation(); setSelectedSources([item.source]); }}
-                        className="text-[8px] font-semibold text-slate-400 dark:text-zinc-500 hover:text-indigo-500 uppercase tracking-wider font-mono truncate max-w-[110px] flex items-center gap-1"
+                        className="order-2 sm:order-3 text-[9px] sm:text-[8px] font-semibold text-slate-400 dark:text-zinc-500 hover:text-indigo-500 uppercase tracking-wider font-mono truncate max-w-[120px] flex items-center gap-1"
                         title={`Show only events from ${item.source}`}
                       >
                         <img

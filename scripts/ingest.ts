@@ -45,6 +45,23 @@ function cleanDate(raw: string): string {
   return new Date().toISOString().split("T")[0];
 }
 
+// If an extracted date is in the past, assume a wrong year and roll it forward
+// to the next occurrence of that month/day (this year, else next year).
+function rollForwardIfPast(dateStr: string): string {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dateStr);
+  if (!m) return dateStr;
+  const today = new Date();
+  today.setUTCHours(0, 0, 0, 0);
+  const orig = new Date(`${dateStr}T12:00:00Z`);
+  if (isNaN(orig.getTime()) || orig.getTime() >= today.getTime()) return dateStr;
+  const [, , mm, dd] = m;
+  let cand = new Date(`${today.getUTCFullYear()}-${mm}-${dd}T12:00:00Z`);
+  if (cand.getTime() < today.getTime()) {
+    cand = new Date(`${today.getUTCFullYear() + 1}-${mm}-${dd}T12:00:00Z`);
+  }
+  return isNaN(cand.getTime()) ? dateStr : cand.toISOString().split("T")[0];
+}
+
 function dedupeKey(title: string, dateStr: string): string {
   const normTitle = (title || "")
     .toLowerCase()
@@ -59,7 +76,7 @@ const VALID_CATS = ["concerts", "broadway", "classical", "sports", "other"];
 
 function normalizeEvent(raw: any, sourceUrl: string, provider: string) {
   const cat = VALID_CATS.includes((raw.category || "").toLowerCase()) ? raw.category.toLowerCase() : "other";
-  const dateStr = cleanDate(raw.date);
+  const dateStr = rollForwardIfPast(cleanDate(raw.date));
   const start = `${dateStr}T${raw.time || "19:00"}:00Z`;
   const startTs = new Date(start).getTime();
   const title = (raw.title || "Untitled Event").toString().trim();
