@@ -340,27 +340,11 @@ export default function App() {
     if (b) setSelectedBoroughs(b.split(",").filter(Boolean));
   }, []);
 
-  // Handle auto-refresh interval (5 minutes)
-  useEffect(() => {
-    if (!autoRefresh) return;
-    const interval = setInterval(() => {
-      fetchTicketmaster(true);
-    }, 300000);
-    return () => clearInterval(interval);
-  }, [autoRefresh, ticketmasterKey]);
-
   // Primary data path: fetch the shared events.json published by the scheduled
-  // scraper (GitHub Actions). The browser no longer scrapes on every visit.
-  // If the file is missing/unreachable (e.g. the cron hasn't run yet), fall
-  // back to the legacy client-side fetch so the app is never empty.
+  // scraper (GitHub Actions). The browser no longer scrapes — all sourcing
+  // happens server-side in the cron and lands in this feed.
   useEffect(() => {
     let cancelled = false;
-    const runLegacyFallback = () => {
-      if (cancelled) return;
-      fetchTicketmaster(false);
-      fetchGoogleEvents("popular events");
-      if (userSources.length > 0) syncAllCustomSources();
-    };
 
     (async () => {
       try {
@@ -392,8 +376,8 @@ export default function App() {
         mergeAndDeDuplicate(mapped);
         setLastUpdated(data.generatedAt ? new Date(data.generatedAt) : new Date());
       } catch (err: any) {
-        console.warn("Could not load shared events.json; using legacy fetch.", err?.message);
-        runLegacyFallback();
+        console.warn("Could not load the events feed.", err?.message);
+        if (!cancelled) setErrorMessage("Couldn't load the live events feed. It refreshes hourly — please try again shortly.");
       }
     })();
 
@@ -1436,34 +1420,15 @@ export default function App() {
             {theme === "light" ? <Sun size={18} /> : theme === "dark" ? <Moon size={18} /> : <Monitor size={18} />}
           </button>
 
-          {/* Refresh control triggers primary Ticketmaster feeds and optionally grounded web search */}
+          {/* Add a one-off event by hand (client-side) */}
           <button
-            onClick={() => fetchTicketmaster(false)}
-            className="hidden sm:flex px-4 py-1.5 bg-slate-900 dark:bg-zinc-100 text-white dark:text-black hover:opacity-90 active:scale-[0.98] transition-all text-xs font-semibold rounded-full items-center gap-1.5 shadow-sm"
-            id="refresh-feed-btn"
-          >
-            <RefreshCw size={12} className={loading ? "animate-spin" : ""} />
-            Sync Ticketmaster
-          </button>
-
-          <button
-            onClick={fetchGeminiSearch}
-            className="hidden sm:flex px-4 py-1.5 bg-indigo-600 text-white hover:bg-indigo-700 active:scale-[0.98] transition-all text-xs font-semibold rounded-full items-center gap-1.5 shadow-sm"
-            id="grounded-gemini-btn"
-          >
-            <Sparkles size={12} />
-            Ground with Gemini
-          </button>
-
-          {/* Add a custom source entry point (opens Settings import section) */}
-          <button
-            onClick={() => setSettingsOpen(true)}
+            onClick={() => setAddEventOpen(true)}
             className="flex px-3 sm:px-4 py-1.5 bg-emerald-600 text-white hover:bg-emerald-700 active:scale-[0.98] transition-all text-xs font-semibold rounded-full items-center gap-1.5 shadow-sm"
-            id="add-source-btn"
-            title="Add an event website (e.g. wnyc.org) to your calendar"
+            id="add-event-btn"
+            title="Add an event to your calendar"
           >
             <Plus size={13} />
-            <span className="hidden sm:inline">Add source</span>
+            <span className="hidden sm:inline">Add event</span>
           </button>
 
           {/* Mobile floating layouts toggler */}
@@ -1474,17 +1439,6 @@ export default function App() {
           >
             <SlidersHorizontal size={18} />
           </button>
-
-          <div className="w-px h-6 bg-slate-200 dark:bg-zinc-800 mx-1"></div>
-
-          <button
-            onClick={() => setSettingsOpen(true)}
-            className="px-4 py-1.5 border border-slate-200 dark:border-zinc-800 rounded-full text-xs font-medium hover:bg-black/5 dark:hover:bg-white/5 transition-all text-slate-700 dark:text-zinc-300"
-            id="settings-panel-btn"
-          >
-            Settings
-          </button>
-
         </div>
       </nav>
 
@@ -1531,16 +1485,7 @@ export default function App() {
             <AlertCircle size={16} className="shrink-0" />
             <div className="flex-1">
               <p className="font-semibold">{errorMessage}</p>
-              <p className="opacity-80">Check that your configuration keys are valid. You can add alternative keys inside the Settings dashboard.</p>
             </div>
-            {/api key|not configured|gemini|serpapi|quota|rate limit/i.test(errorMessage) && (
-              <button
-                onClick={() => { setErrorMessage(null); setSettingsOpen(true); }}
-                className="px-3 py-1.5 bg-red-500 text-white rounded-full text-[11px] font-semibold hover:bg-red-600 shrink-0"
-              >
-                Open Settings
-              </button>
-            )}
             <button onClick={() => setErrorMessage(null)} className="p-1 hover:bg-red-500/10 rounded">
               <X size={14} />
             </button>
@@ -2022,34 +1967,15 @@ export default function App() {
         {/* --- MAIN CONTENT WINDOWS --- */}
         <main className="space-y-6">
           {events.length === 0 && !loading && (
-            <div className="p-8 sm:p-12 rounded-2xl bg-white/60 dark:bg-zinc-950/60 backdrop-blur-sm border border-slate-200/60 dark:border-zinc-800">
-              <div className="text-center max-w-md mx-auto">
-                <Sparkles size={32} className="text-indigo-500 mx-auto mb-4" />
-                <h3 className="font-bold text-lg text-slate-800 dark:text-zinc-200">Let's fill your NYC calendar</h3>
-                <p className="text-sm text-slate-500 dark:text-zinc-400 mt-2">
-                  Orch aggregates events from Ticketmaster, live web search, and any venue website you add.
-                </p>
-              </div>
-              <ol className="mt-6 max-w-md mx-auto space-y-3 text-sm">
-                <li className="flex gap-3 items-start">
-                  <span className="w-5 h-5 rounded-full bg-indigo-600 text-white text-[11px] font-bold flex items-center justify-center shrink-0">1</span>
-                  <span className="text-slate-600 dark:text-zinc-300">Add API keys (optional, but Gemini unlocks reading any website). <button onClick={() => setSettingsOpen(true)} className="text-indigo-600 dark:text-indigo-400 font-semibold hover:underline">Open Settings</button></span>
-                </li>
-                <li className="flex gap-3 items-start">
-                  <span className="w-5 h-5 rounded-full bg-indigo-600 text-white text-[11px] font-bold flex items-center justify-center shrink-0">2</span>
-                  <span className="text-slate-600 dark:text-zinc-300">Add event sources — paste a URL or pick the NYC starter pack. <button onClick={() => setSettingsOpen(true)} className="text-indigo-600 dark:text-indigo-400 font-semibold hover:underline">Add sources</button></span>
-                </li>
-                <li className="flex gap-3 items-start">
-                  <span className="w-5 h-5 rounded-full bg-indigo-600 text-white text-[11px] font-bold flex items-center justify-center shrink-0">3</span>
-                  <span className="text-slate-600 dark:text-zinc-300">Browse, save favorites to your plan, and export to your calendar.</span>
-                </li>
-              </ol>
+            <div className="p-8 sm:p-12 rounded-2xl bg-white/60 dark:bg-zinc-950/60 backdrop-blur-sm border border-slate-200/60 dark:border-zinc-800 text-center">
+              <Sparkles size={32} className="text-indigo-500 mx-auto mb-4" />
+              <h3 className="font-bold text-lg text-slate-800 dark:text-zinc-200">No events loaded yet</h3>
+              <p className="text-sm text-slate-500 dark:text-zinc-400 mt-2 max-w-md mx-auto">
+                Events load automatically from the live NYC feed, which refreshes hourly. If nothing appears, the feed may still be updating — check back shortly, or add your own event.
+              </p>
               <div className="mt-6 flex flex-wrap justify-center gap-3">
-                <button onClick={() => setSettingsOpen(true)} className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold rounded-full">
-                  Add your first source
-                </button>
-                <button onClick={() => fetchTicketmaster(false)} className="px-4 py-2 border border-slate-200 dark:border-zinc-800 text-xs font-semibold rounded-full hover:bg-slate-100 dark:hover:bg-zinc-900">
-                  Retry sync
+                <button onClick={() => setAddEventOpen(true)} className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold rounded-full">
+                  Add an event
                 </button>
               </div>
             </div>
@@ -2082,7 +2008,7 @@ export default function App() {
                 No matching listings found
               </h3>
               <p className="text-sm text-slate-500 dark:text-zinc-400 mt-2">
-                We couldn't locate any loaded items matching your filters. Clear filters, or search the live web for more NYC events.
+                We couldn't locate any loaded events matching your filters. Try clearing them.
               </p>
               <div className="mt-6 flex flex-wrap justify-center gap-3">
                 <button
@@ -2101,16 +2027,6 @@ export default function App() {
                 >
                   Clear all filters
                 </button>
-                {searchQuery.trim() && (
-                  <button
-                    onClick={() => fetchGoogleEvents(searchQuery.trim())}
-                    disabled={searchingGoogleEvents}
-                    className="px-4 py-2 text-xs font-semibold rounded-full bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-50 flex items-center gap-1.5"
-                  >
-                    {searchingGoogleEvents ? <RefreshCw size={12} className="animate-spin" /> : <Search size={12} />}
-                    Search the web for "{searchQuery.trim()}"
-                  </button>
-                )}
               </div>
             </div>
           )}
@@ -2824,293 +2740,6 @@ export default function App() {
                   <span className="text-[11px] font-mono font-bold text-emerald-600 shrink-0">{e.price}</span>
                 </button>
               ))}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* --- SETTINGS & PROXY CONTROL INLINE DRAWER MODAL --- */}
-      {settingsOpen && (
-        <div
-          onClick={() => setSettingsOpen(false)}
-          className="fixed inset-0 z-[100] bg-black/60 backdrop-blur-md flex items-center justify-center p-4 animate-fade-in"
-        >
-          <div
-            onClick={(e) => e.stopPropagation()}
-            className="bg-white dark:bg-zinc-950 w-full max-w-lg rounded-3xl p-6 border border-slate-200 dark:border-zinc-850 shadow-2xl relative space-y-5 overflow-y-auto max-h-[85vh]"
-          >
-            <div className="flex items-center justify-between border-b border-slate-200 dark:border-zinc-800 pb-3">
-              <div className="flex items-center gap-2">
-                <Settings size={18} className="text-indigo-600" />
-                <h3 className="font-extrabold text-base text-slate-800 dark:text-zinc-100 font-display">
-                  Orch Dashboard
-                </h3>
-              </div>
-              <button
-                onClick={() => setSettingsOpen(false)}
-                className="p-1.5 hover:bg-slate-100 dark:hover:bg-zinc-900 rounded-full transition-all"
-              >
-                <X size={18} />
-              </button>
-            </div>
-
-            {/* API Keys customization forms */}
-            <div className="space-y-4">
-              <div className="space-y-1.5">
-                <label className="text-xs font-bold text-slate-500 dark:text-zinc-450 uppercase tracking-wider">
-                  Ticketmaster API Key (Optional Override)
-                </label>
-                <input
-                  type="password"
-                  value={ticketmasterKey}
-                  onChange={(e) => {
-                    setTicketmasterKey(e.target.value);
-                    localStorage.setItem("marquee_tm_key", e.target.value);
-                  }}
-                  placeholder="Paste Consumer Key from developer.ticketmaster.com"
-                  className="w-full p-2 text-xs bg-slate-50 dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-xl"
-                />
-              </div>
-
-              <div className="space-y-1.5">
-                <label className="text-xs font-bold text-slate-500 dark:text-zinc-450 uppercase tracking-wider">
-                  Gemini API Key (Optional Override)
-                </label>
-                <input
-                  type="password"
-                  value={geminiKey}
-                  onChange={(e) => {
-                    setGeminiKey(e.target.value);
-                    localStorage.setItem("marquee_gemini_key", e.target.value);
-                  }}
-                  placeholder="Paste key from Google AI Studio"
-                  className="w-full p-2 text-xs bg-slate-50 dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-xl"
-                />
-              </div>
-
-              <div className="space-y-1.5">
-                <label className="text-xs font-bold text-slate-500 dark:text-zinc-450 uppercase tracking-wider">
-                  SerpApi API Key (Optional Override)
-                </label>
-                <input
-                  type="password"
-                  value={serpapiKey}
-                  onChange={(e) => {
-                    setSerpapiKey(e.target.value);
-                    localStorage.setItem("marquee_serpapi_key", e.target.value);
-                  }}
-                  placeholder="Paste key from serpapi.com to query live Google Events"
-                  className="w-full p-2 text-xs bg-slate-50 dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-xl"
-                />
-              </div>
-
-              {/* Auto Refresh setting checkbox */}
-              <label className="flex items-center gap-3 text-xs font-semibold text-slate-700 dark:text-zinc-300 ring-offset-black cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={autoRefresh}
-                  onChange={(e) => setAutoRefresh(e.target.checked)}
-                  className="w-4 h-4 rounded border-slate-300 dark:border-zinc-700"
-                />
-                Configure background 5-minute Auto-refresh loops (Ticketmaster only)
-              </label>
-            </div>
-
-            {/* Custom scraping parsing forms */}
-            <>
-                <form onSubmit={parseCustomPage} className="space-y-2 pt-2 border-t border-slate-200 dark:border-zinc-900">
-                  <div className="flex items-center justify-between">
-                    <label className="text-xs font-bold text-slate-500 dark:text-zinc-450 uppercase tracking-wider flex items-center gap-1.5">
-                      <Plus size={14} />
-                      Add event sources
-                    </label>
-                    <button
-                      type="button"
-                      onClick={() => { setSettingsOpen(false); setAddEventOpen(true); }}
-                      className="text-[10px] font-semibold text-indigo-600 dark:text-indigo-400 hover:underline"
-                    >
-                      + Add by hand
-                    </button>
-                  </div>
-                  <textarea
-                    rows={2}
-                    value={addUrlInput}
-                    onChange={(e) => setAddUrlInput(e.target.value)}
-                    placeholder="Paste one or more URLs (one per line) — e.g. wnyc.org/events, carnegiehall.org/calendar"
-                    className="w-full p-2 text-xs bg-slate-50 dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-xl focus:outline-none focus:ring-1 focus:ring-indigo-500 resize-y"
-                  />
-                  <div className="flex items-center justify-between gap-2">
-                    <p className="text-[10px] text-slate-400 dark:text-zinc-500">
-                      Sites with structured listings import instantly; others use AI (needs a Gemini key).
-                    </p>
-                    <button
-                      type="submit"
-                      disabled={addingSource}
-                      className="px-4 py-2 bg-slate-900 dark:bg-zinc-100 text-white dark:text-black hover:opacity-90 disabled:opacity-50 rounded-xl text-xs font-semibold shadow-sm shrink-0 flex items-center gap-1.5"
-                    >
-                      {addingSource ? (<><RefreshCw size={11} className="animate-spin" /> Importing...</>) : "Import"}
-                    </button>
-                  </div>
-
-                  {/* NYC starter pack — one-click add */}
-                  <div className="pt-1">
-                    <span className="text-[9px] font-bold text-slate-400 uppercase tracking-widest">NYC starter pack</span>
-                    <div className="flex flex-wrap gap-1.5 mt-1.5">
-                      {NYC_STARTER_SOURCES.map((s) => {
-                        const already = userSources.some((u) => u.toLowerCase() === s.url.toLowerCase());
-                        return (
-                          <button
-                            key={s.url}
-                            type="button"
-                            disabled={addingSource || already}
-                            onClick={() => addSources(s.url)}
-                            className={`px-2 py-1 rounded-full text-[10px] font-semibold border transition-all flex items-center gap-1 ${
-                              already
-                                ? "bg-emerald-50 dark:bg-emerald-950/30 border-emerald-200 dark:border-emerald-900 text-emerald-600 cursor-default"
-                                : "bg-white dark:bg-zinc-900 border-slate-200 dark:border-zinc-800 text-slate-600 dark:text-zinc-300 hover:border-indigo-400"
-                            }`}
-                            title={s.url}
-                          >
-                            <span>{s.emoji}</span>
-                            <span>{s.label}</span>
-                            {already && <CheckCircle2 size={10} />}
-                          </button>
-                        );
-                      })}
-                    </div>
-                  </div>
-                </form>
-
-                {/* User added sources custom manager lists */}
-                {userSources.length > 0 && (
-                  <div className="space-y-2 pt-2 border-t border-slate-200 dark:border-zinc-900">
-                    <div className="flex items-center justify-between">
-                      <h4 className="text-xs font-bold text-slate-500 uppercase tracking-wider">
-                        Active Custom Sources ({userSources.length})
-                      </h4>
-                      <button
-                        onClick={syncAllCustomSources}
-                        disabled={syncingCustom}
-                        className="flex items-center gap-1.5 px-2 py-1 bg-indigo-50 dark:bg-indigo-950/40 text-[11px] font-semibold text-indigo-650 dark:text-indigo-400 hover:opacity-85 disabled:opacity-50 rounded-lg transition-all"
-                        title="Refresh and sync events from all your saved websites"
-                      >
-                        <RefreshCw size={11} className={syncingCustom ? "animate-spin" : ""} />
-                        {syncingCustom ? "Syncing..." : "Sync All"}
-                      </button>
-                    </div>
-
-                    {syncProgress.total > 0 && (
-                      <div className="space-y-1">
-                        <div className="h-1.5 w-full bg-slate-200 dark:bg-zinc-800 rounded-full overflow-hidden">
-                          <div
-                            className="h-full bg-indigo-600 transition-all"
-                            style={{ width: `${(syncProgress.done / syncProgress.total) * 100}%` }}
-                          />
-                        </div>
-                        {syncProgressMsg && (
-                          <div className="text-[10px] text-indigo-650 dark:text-indigo-400 font-mono">{syncProgressMsg}</div>
-                        )}
-                      </div>
-                    )}
-
-                    <div className="space-y-1 max-h-44 overflow-y-auto">
-                      {userSources.map((src) => {
-                        const host = hostOf(src);
-                        const st = sourceStatus[src];
-                        const dot =
-                          st?.status === "ok" ? "bg-emerald-500"
-                          : st?.status === "failed" ? "bg-red-500"
-                          : st?.status === "pending" ? "bg-amber-400 animate-pulse"
-                          : "bg-slate-300 dark:bg-zinc-700";
-                        return (
-                          <div
-                            key={src}
-                            className="flex items-center justify-between p-2 rounded bg-slate-50 dark:bg-zinc-900/40 text-[11px] gap-2"
-                          >
-                            <div className="flex items-center gap-2 min-w-0">
-                              <span className={`w-2 h-2 rounded-full shrink-0 ${dot}`} title={st?.error || st?.status || "not synced yet"} />
-                              <div className="min-w-0">
-                                <span className="truncate block max-w-[200px] font-mono" title={src}>{host}</span>
-                                <span className="text-[9px] text-slate-400">
-                                  {st?.status === "ok" && `${st.count} event(s)`}
-                                  {st?.status === "failed" && (st.error ? st.error.slice(0, 30) : "failed — retry")}
-                                  {st?.status === "pending" && "syncing…"}
-                                  {st?.lastSync ? ` · ${new Date(st.lastSync).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}` : ""}
-                                </span>
-                              </div>
-                            </div>
-                            <div className="flex items-center gap-0.5 shrink-0">
-                              <button
-                                onClick={() => importFromUrl(src)}
-                                className="text-slate-400 hover:text-indigo-500 p-1 hover:bg-indigo-500/10 rounded"
-                                title="Re-sync this source"
-                              >
-                                <RefreshCw size={11} />
-                              </button>
-                              <button
-                                onClick={() => removeCustomSource(src)}
-                                className="text-red-500 p-1 hover:bg-red-500/10 rounded"
-                                title="Remove source & its events"
-                              >
-                                <Trash2 size={12} />
-                              </button>
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-                )}
-              </>
-
-            {/* Google Events API Section */}
-            <div className="pt-4 border-t border-slate-200 dark:border-zinc-900 space-y-3">
-              <label className="text-xs font-bold text-slate-500 dark:text-zinc-450 uppercase tracking-wider flex items-center gap-1.5">
-                <Sparkles size={14} className="text-indigo-600 dark:text-indigo-400" />
-                Live "Google Events API" Search (NYC Only)
-              </label>
-              
-              <div className="p-4 bg-slate-50 dark:bg-zinc-900 border border-slate-200/60 dark:border-zinc-800 rounded-2xl space-y-3">
-                <p className="text-[10.5px] text-slate-500 dark:text-zinc-400">
-                  Search live events on Google across the 5 boroughs of New York City for any topic (e.g. <span className="font-semibold text-slate-700 dark:text-zinc-300">"jazz tonight"</span>, <span className="font-semibold text-slate-700 dark:text-zinc-300">"free street fair"</span>, <span className="font-semibold text-slate-700 dark:text-zinc-300">"broadway reviews"</span>).
-                </p>
-                <form
-                  onSubmit={(e) => {
-                    e.preventDefault();
-                    fetchGoogleEvents();
-                  }}
-                  className="flex gap-2"
-                >
-                  <input
-                    type="text"
-                    required
-                    value={googleEventsQuery}
-                    onChange={(e) => setGoogleEventsQuery(e.target.value)}
-                    placeholder="e.g., live jazz club, central park..."
-                    className="flex-1 p-2 text-xs bg-white dark:bg-black border border-slate-200 dark:border-zinc-800 rounded-xl focus:outline-none focus:ring-1 focus:ring-indigo-500"
-                  />
-                  <button
-                    type="submit"
-                    disabled={searchingGoogleEvents}
-                    className="px-4 py-2 bg-indigo-600 hover:bg-indigo-750 text-white rounded-xl text-xs font-semibold shadow-sm shrink-0 flex items-center gap-1 transition-all"
-                  >
-                    {searchingGoogleEvents ? (
-                      <>
-                        <RefreshCw size={11} className="animate-spin" />
-                        Fetching...
-                      </>
-                    ) : (
-                      "Search API"
-                    )}
-                  </button>
-                </form>
-
-                {googleEventsSuccessNote && (
-                  <div className="p-2 text-[10.5px] text-indigo-700 dark:text-indigo-400 bg-indigo-50/50 dark:bg-indigo-950/20 rounded-xl border border-indigo-100/30 font-medium">
-                    {googleEventsSuccessNote}
-                  </div>
-                )}
-              </div>
             </div>
           </div>
         </div>
