@@ -3,7 +3,6 @@ import path from "path";
 import { createServer as createViteServer } from "vite";
 import dotenv from "dotenv";
 import { getGeminiClient, fetchWithRetry, extractJsonLdEvents } from "./serverLib";
-import { runIngest, getLastIngestMeta } from "./ingest";
 
 dotenv.config();
 
@@ -564,43 +563,6 @@ Ensure all keys are formatted perfectly in JSON. Do not return any backticks or 
       return res.status(400).json({ success: false, error: "Unavailable action" });
     } catch (err: any) {
       console.error("Unhandle server-side proxy exception:", err);
-      return res.status(500).json({ success: false, error: err.message });
-    }
-  });
-
-  // --- SCHEDULED INGEST: run the scraper and write events to Firestore. ---
-  // Triggered by the GitHub Actions cron (must send the shared secret header).
-  app.post("/api/ingest", async (req, res) => {
-    const secret = process.env.INGEST_SECRET;
-    const provided = (req.headers["x-ingest-secret"] as string) || req.body?.secret;
-    if (!secret || provided !== secret) {
-      return res.status(401).json({ success: false, error: "Unauthorized" });
-    }
-    try {
-      const summary = await runIngest();
-      return res.status(200).json({ success: true, ...summary });
-    } catch (err: any) {
-      console.error("Ingest failed:", err);
-      return res.status(500).json({ success: false, error: err.message });
-    }
-  });
-
-  // --- MANUAL REFRESH: lets the UI trigger an ingest, globally throttled so it
-  // can be called without the secret without enabling abuse. ---
-  let lastRefreshTs = 0;
-  const REFRESH_THROTTLE_MS = 5 * 60 * 1000;
-  app.post("/api/refresh", async (_req, res) => {
-    const now = Date.now();
-    if (now - lastRefreshTs < REFRESH_THROTTLE_MS) {
-      const meta = await getLastIngestMeta();
-      return res.status(200).json({ success: true, throttled: true, meta });
-    }
-    lastRefreshTs = now;
-    try {
-      const summary = await runIngest();
-      return res.status(200).json({ success: true, throttled: false, ...summary });
-    } catch (err: any) {
-      console.error("Refresh ingest failed:", err);
       return res.status(500).json({ success: false, error: err.message });
     }
   });

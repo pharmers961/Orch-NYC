@@ -21,15 +21,15 @@ import {
   Palette,
   CheckCircle2,
   SlidersHorizontal,
-  Info,
-  LogIn,
-  LogOut,
-  User
+  Info
 } from "lucide-react";
 import { EventItem, EventCategory, AppState } from "./types";
-import { onAuthStateChanged, signInWithPopup, signOut } from "firebase/auth";
-import { doc, getDoc, setDoc, serverTimestamp, collection, query, where, orderBy, limit, onSnapshot } from "firebase/firestore";
-import { auth, db, googleProvider } from "./firebase";
+
+// Shared events are produced by the scheduled scraper (GitHub Actions) and
+// published to the `data` branch as events.json. Override with VITE_EVENTS_URL.
+const EVENTS_URL =
+  (import.meta as any).env?.VITE_EVENTS_URL ||
+  "https://raw.githubusercontent.com/pharmers961/Orch-NYC/data/events.json";
 
 // Seed data as fallback? The brief says: "NO sample/fake fallback. Only real live events." 
 // We will start with empty events and rely completely on fetches.
@@ -326,50 +326,6 @@ export default function App() {
   const [addEventOpen, setAddEventOpen] = useState(false); // Manual add-event modal
   const [dayAgendaKey, setDayAgendaKey] = useState<string | null>(null); // Calendar day popover (YYYY-MM-DD local)
 
-  // Firebase Auth & Database Sync States
-  const [currentUser, setCurrentUser] = useState<any>(null);
-  const [authLoading, setAuthLoading] = useState(true);
-
-  // Sync custom sources list to user's private Firestore document
-  const saveUserSourcesToFirestore = async (sourcesList: string[]) => {
-    if (!auth.currentUser) return;
-    try {
-      const userDocRef = doc(db, "users", auth.currentUser.uid);
-      await setDoc(userDocRef, {
-        userId: auth.currentUser.uid,
-        sources: sourcesList,
-        updatedAt: serverTimestamp(),
-      });
-    } catch (err) {
-      console.error("Failed to save custom sources to Firestore:", err);
-    }
-  };
-
-  // Google Login popup authentication
-  const loginWithGoogle = async () => {
-    try {
-      setErrorMessage(null);
-      await signInWithPopup(auth, googleProvider);
-      setApiSuccessNote("Successfully signed in with Google!");
-    } catch (err: any) {
-      console.error(err);
-      setErrorMessage(`Authentication failed: ${err.message || "Unknown error"}`);
-    }
-  };
-
-  // Google signout 
-  const logout = async () => {
-    try {
-      setErrorMessage(null);
-      await signOut(auth);
-      setApiSuccessNote("Logged out successfully.");
-      setUserSources([]);
-    } catch (err: any) {
-      console.error(err);
-      setErrorMessage("Failed to sign out.");
-    }
-  };
-
   // Theme observer
   useEffect(() => {
     const root = window.document.documentElement;
@@ -390,55 +346,6 @@ export default function App() {
       return () => media.removeEventListener("change", listener);
     }
   }, [theme]);
-
-  // Firebase Auth State Listener & Custom Sources Database Fetching
-  useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, async (user) => {
-      setCurrentUser(user);
-      setAuthLoading(false);
-      
-      if (user) {
-        setSyncProgressMsg("Loading saved profile sources...");
-        const userDocRef = doc(db, "users", user.uid);
-        try {
-          const userDoc = await getDoc(userDocRef);
-          if (userDoc.exists()) {
-            const data = userDoc.data();
-            const firestoreSources = data?.sources || [];
-            // Merge local and firestore sources uniquely
-            setUserSources((prev) => {
-              const combined = [...new Set([...prev, ...firestoreSources])];
-              return combined;
-            });
-          } else {
-            // First time login - initialize user document with current local userSources
-            const savedSources = localStorage.getItem("marquee_user_sources");
-            let localSources: string[] = [];
-            if (savedSources) {
-              try {
-                const parsed = JSON.parse(savedSources);
-                if (Array.isArray(parsed)) {
-                  localSources = [...new Set(parsed)];
-                }
-              } catch (e) {
-                console.error(e);
-              }
-            }
-            await setDoc(userDocRef, {
-              userId: user.uid,
-              sources: localSources,
-              updatedAt: serverTimestamp(),
-            });
-          }
-        } catch (err) {
-          console.error("Error loading user profile on login:", err);
-        } finally {
-          setSyncProgressMsg("");
-        }
-      }
-    });
-    return () => unsubscribe();
-  }, []);
 
   // Persists events & saved state
   useEffect(() => {
@@ -535,69 +442,55 @@ export default function App() {
     }
   }, []);
 
-  // Primary data path: read shared events live from Firestore. The scheduled
-  // ingest job keeps this collection fresh, so the browser no longer has to
-  // scrape on every visit. If the DB is empty or unreachable (e.g. the backend
-  // isn't set up yet), gracefully fall back to the legacy client-side fetch.
-  const firstSnapshotHandledRef = useRef(false);
+  // Primary data path: fetch the shared events.json published by the scheduled
+  // scraper (GitHub Actions). The browser no longer scrapes on every visit.
+  // If the file is missing/unreachable (e.g. the cron hasn't run yet), fall
+  // back to the legacy client-side fetch so the app is never empty.
   useEffect(() => {
-    const cutoff = Date.now() - 24 * 60 * 60 * 1000; // include events from today onward
+    let cancelled = false;
     const runLegacyFallback = () => {
+      if (cancelled) return;
       fetchTicketmaster(false);
       fetchGoogleEvents("popular events");
       if (userSources.length > 0) syncAllCustomSources();
     };
 
-    let unsub = () => {};
-    try {
-      const q = query(
-        collection(db, "events"),
-        where("startTs", ">=", cutoff),
-        orderBy("startTs", "asc"),
-        limit(800)
-      );
-      unsub = onSnapshot(
-        q,
-        (snap) => {
-          if (!snap.empty) {
-            const dbEvents: EventItem[] = snap.docs.map((d) => {
-              const x = d.data() as any;
-              return {
-                id: d.id,
-                title: x.title,
-                artist: x.artist || "",
-                venue: x.venue || "NYC Venue",
-                area: x.area || "New York",
-                cat: x.cat || "other",
-                price: x.price || "Check Site",
-                start: x.start,
-                desc: x.desc || "",
-                ticketUrl: x.ticketUrl || "",
-                image: x.image || "",
-                status: x.status,
-                source: x.source || "",
-                provider: x.provider || "Gemini",
-                added: x.lastSeen || Date.now(),
-                tags: [],
-              };
-            });
-            mergeAndDeDuplicate(dbEvents);
-            setLastUpdated(new Date());
-          } else if (!firstSnapshotHandledRef.current) {
-            runLegacyFallback();
-          }
-          firstSnapshotHandledRef.current = true;
-        },
-        (err) => {
-          console.warn("Firestore events subscription failed; using legacy fetch.", err?.message);
-          if (!firstSnapshotHandledRef.current) runLegacyFallback();
-          firstSnapshotHandledRef.current = true;
-        }
-      );
-    } catch (err) {
-      runLegacyFallback();
-    }
-    return () => unsub();
+    (async () => {
+      try {
+        const res = await fetch(EVENTS_URL, { cache: "no-store" });
+        if (!res.ok) throw new Error(`events.json ${res.status}`);
+        const data = await res.json();
+        const list: any[] = Array.isArray(data) ? data : data.events;
+        if (!Array.isArray(list) || list.length === 0) throw new Error("empty events.json");
+
+        const mapped: EventItem[] = list.map((x) => ({
+          id: x.id || `feed_${Math.random().toString(36).slice(2, 9)}`,
+          title: x.title || "Untitled Event",
+          artist: x.artist || "",
+          venue: x.venue || "NYC Venue",
+          area: x.area || "New York",
+          cat: x.cat || "other",
+          price: x.price || "Check Site",
+          start: x.start,
+          desc: x.desc || x.description || "",
+          ticketUrl: x.ticketUrl || x.sourceUrl || "",
+          image: x.image || "",
+          status: x.status,
+          source: x.source || "",
+          provider: x.provider || "Gemini",
+          added: Date.now(),
+          tags: [],
+        }));
+        if (cancelled) return;
+        mergeAndDeDuplicate(mapped);
+        setLastUpdated(data.generatedAt ? new Date(data.generatedAt) : new Date());
+      } catch (err: any) {
+        console.warn("Could not load shared events.json; using legacy fetch.", err?.message);
+        runLegacyFallback();
+      }
+    })();
+
+    return () => { cancelled = true; };
   }, []);
 
   // --- NORMALIZE & DE-DUPLICATE ENGINE ---
@@ -974,7 +867,6 @@ export default function App() {
     if (toAdd.length > 0) {
       const nextSources = [...userSources, ...toAdd];
       setUserSources(nextSources);
-      if (currentUser) saveUserSourcesToFirestore(nextSources);
     }
 
     let totalImported = 0;
@@ -1006,7 +898,6 @@ export default function App() {
   const removeCustomSource = (sourceUrl: string) => {
     const nextSources = userSources.filter((s) => s !== sourceUrl);
     setUserSources(nextSources);
-    if (currentUser) saveUserSourcesToFirestore(nextSources);
     setSourceStatus((prev) => {
       const next = { ...prev };
       delete next[sourceUrl];
@@ -1678,42 +1569,6 @@ export default function App() {
             Settings
           </button>
 
-          {/* User Account / Auth Widget */}
-          {authLoading ? (
-            <div className="w-8 h-8 rounded-full bg-slate-100 dark:bg-zinc-800 animate-pulse flex items-center justify-center">
-              <span className="text-[10px] text-slate-400">...</span>
-            </div>
-          ) : currentUser ? (
-            <div className="flex items-center gap-1.5">
-              <div 
-                className="flex items-center gap-1.5 px-3 py-1 bg-indigo-50 dark:bg-indigo-950/30 border border-indigo-100/50 dark:border-indigo-900/40 rounded-full text-xs font-semibold text-indigo-700 dark:text-indigo-400 select-none max-w-[150px]"
-                title={`Signed in as ${currentUser.displayName || currentUser.email}`}
-              >
-                {currentUser.photoURL ? (
-                  <img src={currentUser.photoURL} alt="avatar" className="w-4.5 h-4.5 rounded-full object-cover select-none" referrerPolicy="no-referrer" />
-                ) : (
-                  <User size={12} />
-                )}
-                <span className="hidden md:inline truncate">{currentUser.displayName || currentUser.email?.split("@")[0]}</span>
-              </div>
-              <button
-                onClick={logout}
-                className="p-1.5 text-slate-400 hover:text-red-500 hover:bg-red-500/5 rounded-full transition-all"
-                title="Sign Out"
-              >
-                <LogOut size={16} />
-              </button>
-            </div>
-          ) : (
-            <button
-              onClick={loginWithGoogle}
-              className="flex items-center gap-1.5 px-3.5 py-1.5 bg-indigo-650 hover:bg-indigo-700 text-white text-xs font-semibold rounded-full active:scale-[0.97] transition-all shadow-sm"
-              title="Sign in with your Google account to save sources permanently"
-            >
-              <LogIn size={13} />
-              Sign In
-            </button>
-          )}
         </div>
       </nav>
 
@@ -3110,22 +2965,7 @@ export default function App() {
               </label>
             </div>
 
-            {/* Custom scraping parsing forms — available to everyone; sign-in only adds cross-device sync */}
-            {!currentUser && (
-              <div className="pt-2 border-t border-slate-200 dark:border-zinc-900 flex items-center justify-between gap-3 p-3 rounded-2xl bg-indigo-50/50 dark:bg-indigo-950/20 border border-indigo-100/50 dark:border-indigo-950/40">
-                <p className="text-[10.5px] text-slate-500 dark:text-zinc-400">
-                  Sign in with Google to sync your custom sources across devices (optional — importing works without it).
-                </p>
-                <button
-                  type="button"
-                  onClick={loginWithGoogle}
-                  className="flex items-center gap-1.5 px-3 py-1.5 bg-indigo-600 hover:bg-indigo-750 text-white rounded-xl text-xs font-semibold shadow-sm transition-all shrink-0"
-                >
-                  <LogIn size={13} />
-                  Sign In
-                </button>
-              </div>
-            )}
+            {/* Custom scraping parsing forms */}
             <>
                 <form onSubmit={parseCustomPage} className="space-y-2 pt-2 border-t border-slate-200 dark:border-zinc-900">
                   <div className="flex items-center justify-between">
