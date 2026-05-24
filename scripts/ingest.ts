@@ -192,6 +192,50 @@ async function fetchTicketmaster(key: string): Promise<any[]> {
   return raw.map(mapTmEvent);
 }
 
+// --- Playwright headless rendering (fallback for JS-rendered venue pages) ---
+// Lazy, shared browser. If Playwright/Chromium isn't available, it degrades to
+// null and the pipeline falls back to Gemini exactly as before.
+let browserPromise: Promise<any | null> | null = null;
+async function getBrowser(): Promise<any | null> {
+  if (process.env.DISABLE_PLAYWRIGHT === "1") return null;
+  if (!browserPromise) {
+    browserPromise = (async () => {
+      try {
+        const { chromium } = await import("playwright");
+        return await chromium.launch({ args: ["--no-sandbox", "--disable-dev-shm-usage"] });
+      } catch (err) {
+        console.warn("Playwright unavailable, skipping render fallback:", (err as any)?.message);
+        return null;
+      }
+    })();
+  }
+  return browserPromise;
+}
+async function closeBrowser(): Promise<void> {
+  if (!browserPromise) return;
+  const b = await browserPromise;
+  if (b) await b.close().catch(() => {});
+  browserPromise = null;
+}
+async function renderHtml(url: string): Promise<string | null> {
+  const browser = await getBrowser();
+  if (!browser) return null;
+  let page: any;
+  try {
+    page = await browser.newPage({
+      userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    });
+    await page.goto(url, { waitUntil: "domcontentloaded", timeout: 25000 });
+    await page.waitForTimeout(2500); // let client-side JS populate the calendar
+    return await page.content();
+  } catch (err) {
+    console.warn(`Playwright render failed for ${url}:`, (err as any)?.message);
+    return null;
+  } finally {
+    if (page) await page.close().catch(() => {});
+  }
+}
+
 async function extractFromUrl(url: string, geminiKey?: string): Promise<any[]> {
   let html = "";
   try {
@@ -200,12 +244,21 @@ async function extractFromUrl(url: string, geminiKey?: string): Promise<any[]> {
     });
     if (res.ok) html = await res.text();
   } catch {
-    // blocked / network error -> fall through to AI
+    // blocked / network error -> fall through to render/AI
   }
 
   if (html) {
     const ld = extractJsonLdEvents(html, url);
     if (ld.length > 0) return ld;
+  }
+
+  // Plain fetch had no structured events — render the page (executes JS) and
+  // re-check for schema.org, which JS-heavy venue sites inject after load.
+  const rendered = await renderHtml(url);
+  if (rendered) {
+    const ld = extractJsonLdEvents(rendered, url);
+    if (ld.length > 0) return ld;
+    html = rendered; // richer text for the AI fallback than the empty shell
   }
 
   if (!geminiKey && !process.env.GEMINI_API_KEY) return [];
@@ -372,6 +425,8 @@ async function main() {
       perSource[label] = perSource[label] || 0;
     }
   }
+
+  await closeBrowser();
 
   // Accumulate: merge with the previous feed so events captured in earlier runs
   // persist even when a flaky AI extraction returns nothing this run. Fresh
