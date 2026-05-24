@@ -142,11 +142,13 @@ export async function geminiExtractEventsFromUrl(
   webpageText: string | null
 ): Promise<any[]> {
   const ai = getGeminiClient(geminiKey);
+  const today = new Date().toISOString().split("T")[0];
   const hasText = !!webpageText && webpageText.trim().length > 600;
   const lead = hasText
     ? `We fetched the webpage content for the event page: ${url}. The plain-text content is below:\n---\n${webpageText}\n---\nAnalyze this content and extract the event(s) scheduled. If the text looks incomplete, ALSO use Google Search to find current listings for this page.`
     : `We could not read the webpage directly (it may be JS-rendered or blocking scrapers). Use Google Search to look up the current event listings for the page "${url}" (and the organization/venue it represents) and extract its upcoming events.`;
   const prompt = `${lead}
+Today's date is ${today}. ONLY return events scheduled on or after today, and use the correct full calendar year (this year or next) — never default to a past year. Discard anything already past.
 Return a JSON array of parsed events (up to 20 for listings pages, 1 for a single event). Set ticketUrl to the most specific ticket/info page you can find, otherwise "${url}".
 ${EVENT_JSON_SCHEMA_HINT}`;
 

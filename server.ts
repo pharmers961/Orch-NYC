@@ -502,6 +502,7 @@ Analyze this content and extract the event(s) scheduled. Make sure to find the T
           : `We could not read the webpage directly (it may be JS-rendered or blocking scrapers). Use Google Search to look up the current event listings for the page "${url}" (and the organization/venue it represents) and extract its upcoming events. Set ticketUrl to the most specific ticket/info page you can find, otherwise "${url}".`;
 
         const finalPrompt = `${domainAndUrlPrompt}
+Today's date is ${new Date().toISOString().split("T")[0]}. ONLY return events on or after today, and use the correct full calendar year (this year or next) — never default to a past year.
 Return a JSON array of parsed events. If multiple events are scheduled (like a roster/listings page), parse up to 20 events. If a single event, parse 1 event.
 Each event in the array MUST strictly follow this JSON schema:
 {
