@@ -201,7 +201,7 @@ export default function App() {
   });
 
   // Filters State
-  const [selectedSources, setSelectedSources] = useState<string[]>([]);
+  const [hiddenSources, setHiddenSources] = useState<string[]>([]); // sources the user has hidden
   const [selectedVenues, setSelectedVenues] = useState<string[]>([]);
   const [selectedCategories, setSelectedCategories] = useState<EventCategory[]>(["concerts", "broadway", "classical", "sports", "other"]);
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
@@ -923,7 +923,7 @@ export default function App() {
         if (!selectedCategories.includes(e.cat)) return false;
 
         // Sources Filter
-        if (selectedSources.length > 0 && !selectedSources.includes(e.source)) return false;
+        if (hiddenSources.includes(e.source)) return false;
 
         // Venues Filter
         if (selectedVenues.length > 0 && !selectedVenues.includes(e.venue)) return false;
@@ -1032,7 +1032,7 @@ export default function App() {
         }
         return 0;
       });
-  }, [events, selectedCategories, selectedSources, selectedVenues, selectedBoroughs, maxPrice, freeOnly, savedOnly, savedIds, searchQuery, dateFilter, customStart, customEnd, sortBy, selectedTags, viewMode]);
+  }, [events, selectedCategories, hiddenSources, selectedVenues, selectedBoroughs, maxPrice, freeOnly, savedOnly, savedIds, searchQuery, dateFilter, customStart, customEnd, sortBy, selectedTags, viewMode]);
 
   function parseLowestNumericPrice(priceStr: string): number {
     if (priceStr.toLowerCase().includes("tba") || priceStr.toLowerCase().includes("free")) return 0;
@@ -1091,16 +1091,18 @@ export default function App() {
     );
   };
 
+  // Toggle a source's visibility (checked = visible; unchecking hides it).
   const handleSourceCheckbox = (source: string) => {
-    setSelectedSources((prev) => {
+    setHiddenSources((prev) => {
       if (prev.includes(source)) return prev.filter((s) => s !== source);
       return [...prev, source];
     });
   };
 
+  // "Only": show just this source by hiding every other active source.
   const isolateSourceOnly = (source: string, e: React.MouseEvent) => {
     e.stopPropagation();
-    setSelectedSources([source]);
+    setHiddenSources(activeSources.filter((s) => s !== source));
   };
 
   const handleVenueCheckbox = (venue: string) => {
@@ -1851,12 +1853,12 @@ export default function App() {
                 <h3 className="text-[10px] font-bold text-slate-400 dark:text-zinc-500 uppercase tracking-widest">
                   Sources
                 </h3>
-                {selectedSources.length > 0 && (
+                {hiddenSources.length > 0 && (
                   <button
-                    onClick={() => setSelectedSources([])}
+                    onClick={() => setHiddenSources([])}
                     className="text-[9px] text-indigo-600 dark:text-[#5e5ce6] font-semibold hover:underline"
                   >
-                    Clear Filter
+                    Show all
                   </button>
                 )}
               </div>
@@ -1887,7 +1889,7 @@ export default function App() {
                       <div className="flex items-center gap-2">
                         <input
                           type="checkbox"
-                          checked={selectedSources.includes(source)}
+                          checked={!hiddenSources.includes(source)}
                           onChange={() => {}} // toggled on container tap
                           className="w-3.5 h-3.5 rounded border-slate-300 dark:border-zinc-700"
                         />
@@ -2086,7 +2088,7 @@ export default function App() {
                 <button
                   onClick={() => {
                     setSelectedCategories(["concerts", "broadway", "classical", "sports", "other"]);
-                    setSelectedSources([]);
+                    setHiddenSources([]);
                     setSelectedVenues([]);
                     setSelectedBoroughs([]);
                     setMaxPrice(0);
@@ -2246,7 +2248,7 @@ export default function App() {
                       </div>
 
                       <button
-                        onClick={(e) => { e.stopPropagation(); setSelectedSources([item.source]); }}
+                        onClick={(e) => { e.stopPropagation(); setHiddenSources(activeSources.filter((s) => s !== item.source)); }}
                         className="order-2 sm:order-3 text-[9px] sm:text-[8px] font-semibold text-slate-400 dark:text-zinc-500 hover:text-indigo-500 uppercase tracking-wider font-mono truncate max-w-[120px] flex items-center gap-1"
                         title={`Show only events from ${item.source}`}
                       >

@@ -1,0 +1,15 @@
+# Netlify deploy config. The app is a static Vite build that reads the shared
+# events.json (published to the `data` branch by the GitHub Actions scraper)
+# directly from raw.githubusercontent.com at runtime — no server needed.
+[build]
+  command = "vite build"
+  publish = "dist"
+
+[build.environment]
+  NODE_VERSION = "20"
+
+# SPA fallback so any path serves the app shell.
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
