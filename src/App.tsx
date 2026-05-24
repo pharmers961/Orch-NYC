@@ -1,7 +1,6 @@
 import React, { useState, useEffect, useMemo, useRef } from "react";
 import {
   Sparkles,
-  RefreshCw,
   Calendar,
   List as ListIcon,
   Search,
@@ -11,19 +10,16 @@ import {
   CalendarPlus,
   Share2,
   Plus,
-  Trash2,
   X,
-  Settings,
   Moon,
   Sun,
   Monitor,
   AlertCircle,
   Palette,
   CheckCircle2,
-  SlidersHorizontal,
-  Info
+  SlidersHorizontal
 } from "lucide-react";
-import { EventItem, EventCategory, AppState } from "./types";
+import { EventItem, EventCategory } from "./types";
 
 // Shared events are produced by the scheduled scraper (GitHub Actions) and
 // published to the `data` branch as events.json. Override with VITE_EVENTS_URL.
@@ -53,24 +49,6 @@ const SEED_VENU_AREAS: Record<string, string> = {
   "Yankee Stadium": "Bronx",
   "Citi Field": "Queens",
 };
-
-function cleanAndFormatDate(rawDate: string): string {
-  if (!rawDate) return new Date().toISOString().split("T")[0];
-  try {
-    const d = new Date(rawDate);
-    if (!isNaN(d.getTime())) {
-      return d.toISOString().split("T")[0];
-    }
-  } catch (_) {}
-  
-  const match = rawDate.match(/(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})/);
-  if (match) {
-    const [_, y, m, day] = match;
-    return `${y}-${m.padStart(2, "0")}-${day.padStart(2, "0")}`;
-  }
-  
-  return new Date().toISOString().split("T")[0];
-}
 
 function safeGetHostname(url: string | undefined, defaultHost: string): string {
   if (!url) return defaultHost;
@@ -140,18 +118,6 @@ export function localDateKey(d: Date): string {
   return `${y}-${m}-${day}`;
 }
 
-// A curated starter pack of NYC venue / listing sources for one-click adding.
-export const NYC_STARTER_SOURCES: { url: string; label: string; emoji: string }[] = [
-  { url: "https://www.wnyc.org/events/", label: "WNYC Greene Space", emoji: "📻" },
-  { url: "https://www.carnegiehall.org/Calendar", label: "Carnegie Hall", emoji: "🎻" },
-  { url: "https://www.lincolncenter.org/calendar", label: "Lincoln Center", emoji: "🎼" },
-  { url: "https://www.bam.org/calendar", label: "BAM (Brooklyn)", emoji: "🎭" },
-  { url: "https://www.boweryballroom.com/calendar", label: "Bowery Ballroom", emoji: "🎸" },
-  { url: "https://www.bluenotejazz.com/nyc/shows/", label: "Blue Note Jazz", emoji: "🎷" },
-  { url: "https://cityparksfoundation.org/summerstage/", label: "SummerStage", emoji: "🌳" },
-  { url: "https://www.publictheater.org/", label: "The Public Theater", emoji: "🎬" },
-];
-
 export default function App() {
   // --- STATE ---
   const [events, setEvents] = useState<EventItem[]>(() => {
@@ -174,27 +140,6 @@ export default function App() {
   const [theme, setTheme] = useState<"light" | "dark" | "system">(() => {
     return (localStorage.getItem("marquee_theme") as "light" | "dark" | "system") || "system";
   });
-  const [ticketmasterKey, setTicketmasterKey] = useState(() => localStorage.getItem("marquee_tm_key") || "");
-  const [serpapiKey, setSerpapiKey] = useState(() => localStorage.getItem("marquee_serpapi_key") || "");
-  const [geminiKey, setGeminiKey] = useState(() => localStorage.getItem("marquee_gemini_key") || "");
-  const [autoRefresh, setAutoRefresh] = useState(() => {
-    const saved = localStorage.getItem("marquee_auto_refresh");
-    return saved ? JSON.parse(saved) : true;
-  });
-  const [userSources, setUserSources] = useState<string[]>(() => {
-    const saved = localStorage.getItem("marquee_user_sources");
-    if (saved) {
-      try {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          return [...new Set(parsed)];
-        }
-      } catch (e) {
-        console.error("Invalid user sources:", e);
-      }
-    }
-    return ["https://www.wnyc.org/events/"];
-  });
   const [customVenueColors, setCustomVenueColors] = useState<Record<string, string>>(() => {
     const saved = localStorage.getItem("marquee_venue_colors");
     return saved ? JSON.parse(saved) : {};
@@ -206,9 +151,6 @@ export default function App() {
   const [selectedCategories, setSelectedCategories] = useState<EventCategory[]>(["concerts", "broadway", "classical", "sports", "other"]);
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
   const [tagInput, setTagInput] = useState("");
-  const [googleEventsQuery, setGoogleEventsQuery] = useState("");
-  const [searchingGoogleEvents, setSearchingGoogleEvents] = useState(false);
-  const [googleEventsSuccessNote, setGoogleEventsSuccessNote] = useState<string | null>(null);
   const [dateFilter, setDateFilter] = useState<"all" | "today" | "weekend" | "week" | "month" | "custom">("all");
   const [customStart, setCustomStart] = useState("");
   const [customEnd, setCustomEnd] = useState("");
@@ -227,7 +169,6 @@ export default function App() {
 
   // Status/Uis
   const [loading, setLoading] = useState(false);
-  const [loadingProgress, setLoadingProgress] = useState(0);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [apiSuccessNote, setApiSuccessNote] = useState<string | null>(null);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(() => {
@@ -236,17 +177,7 @@ export default function App() {
   });
 
    // Modals state
-  const [settingsOpen, setSettingsOpen] = useState(false);
   const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
-  const [addUrlInput, setAddUrlInput] = useState("");
-  const [addingSource, setAddingSource] = useState(false);
-  const [syncingCustom, setSyncingCustom] = useState(false);
-  const [syncProgressMsg, setSyncProgressMsg] = useState("");
-  const [syncProgress, setSyncProgress] = useState<{ done: number; total: number }>({ done: 0, total: 0 });
-  const [sourceStatus, setSourceStatus] = useState<Record<string, { status: "ok" | "failed" | "pending"; count: number; lastSync: number | null; error?: string }>>(() => {
-    const saved = localStorage.getItem("marquee_source_status");
-    try { return saved ? JSON.parse(saved) : {}; } catch (_) { return {}; }
-  });
   const [sidebarOpen, setSidebarOpen] = useState(false); // Mobile drawer
   const [addEventOpen, setAddEventOpen] = useState(false); // Manual add-event modal
   const [dayAgendaKey, setDayAgendaKey] = useState<string | null>(null); // Calendar day popover (YYYY-MM-DD local)
@@ -282,20 +213,8 @@ export default function App() {
   }, [savedIds]);
 
   useEffect(() => {
-    localStorage.setItem("marquee_auto_refresh", JSON.stringify(autoRefresh));
-  }, [autoRefresh]);
-
-  useEffect(() => {
-    localStorage.setItem("marquee_user_sources", JSON.stringify(userSources));
-  }, [userSources]);
-
-  useEffect(() => {
     localStorage.setItem("marquee_venue_colors", JSON.stringify(customVenueColors));
   }, [customVenueColors]);
-
-  useEffect(() => {
-    localStorage.setItem("marquee_source_status", JSON.stringify(sourceStatus));
-  }, [sourceStatus]);
 
   // Escape closes whichever overlay is open (accessibility).
   useEffect(() => {
@@ -304,12 +223,11 @@ export default function App() {
       if (selectedEventId) setSelectedEventId(null);
       else if (addEventOpen) setAddEventOpen(false);
       else if (dayAgendaKey) setDayAgendaKey(null);
-      else if (settingsOpen) setSettingsOpen(false);
       else if (sidebarOpen) setSidebarOpen(false);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [selectedEventId, addEventOpen, dayAgendaKey, settingsOpen, sidebarOpen]);
+  }, [selectedEventId, addEventOpen, dayAgendaKey, sidebarOpen]);
 
   // Persist primary view state to the URL so it survives reload and is shareable.
   useEffect(() => {
@@ -345,6 +263,7 @@ export default function App() {
   // happens server-side in the cron and lands in this feed.
   useEffect(() => {
     let cancelled = false;
+    setLoading(true);
 
     (async () => {
       try {
@@ -378,6 +297,8 @@ export default function App() {
       } catch (err: any) {
         console.warn("Could not load the events feed.", err?.message);
         if (!cancelled) setErrorMessage("Couldn't load the live events feed. It refreshes hourly — please try again shortly.");
+      } finally {
+        if (!cancelled) setLoading(false);
       }
     })();
 
@@ -424,409 +345,6 @@ export default function App() {
 
       return allEvents;
     });
-  };
-
-  // --- API CALLS ---
-  const fetchTicketmaster = async (isBackground = false) => {
-    if (!isBackground) {
-      setLoading(true);
-      setLoadingProgress(10);
-      setErrorMessage(null);
-    }
-
-    try {
-      const response = await fetch("/api/marquee", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-ticketmaster-key": ticketmasterKey,
-        },
-        body: JSON.stringify({ action: "ticketmaster" }),
-      });
-
-      if (!isBackground) setLoadingProgress(50);
-
-      const resJson = await response.json();
-      if (!isBackground) setLoadingProgress(80);
-
-      if (resJson.success && resJson.data?._embedded?.events) {
-        const rawEvents = resJson.data._embedded.events;
-        const parsed: EventItem[] = rawEvents.map((e: any): EventItem => {
-          // Category mapping
-          const classifications = e.classifications?.[0];
-          const segmentName = classifications?.segment?.name;
-          const genreName = classifications?.genre?.name;
-          let cat: EventCategory = "concerts";
-          if (segmentName === "Sports") cat = "sports";
-          else if (segmentName === "Music") cat = "concerts";
-          else if (genreName === "Classical" || genreName === "Opera" || genreName === "Orchestral") cat = "classical";
-          else cat = "broadway";
-
-          const venueName = e._embedded?.venues?.[0]?.name || "NYC Venue";
-          const area = SEED_VENU_AREAS[venueName] || e._embedded?.venues?.[0]?.city?.name || "New York";
-
-          let priceRange = "Price TBA";
-          if (e.priceRanges?.[0]) {
-            const min = Math.round(e.priceRanges[0].min || 0);
-            const max = Math.round(e.priceRanges[0].max || 0);
-            priceRange = min === max ? `$${min}` : `$${min}–$${max}`;
-          }
-
-          // best imag
-          const sortedImages = e.images ? [...e.images].sort((a: any, b: any) => b.width - a.width) : [];
-          const bestImage = sortedImages.find((img: any) => img.ratio === "16_9")?.url || sortedImages[0]?.url || "";
-
-          return {
-            id: e.id,
-            title: e.name,
-            artist: e._embedded?.attractions?.[0]?.name || "",
-            venue: venueName,
-            area,
-            cat,
-            price: priceRange,
-            start: e.dates.start.dateTime || `${e.dates.start.localDate}T19:00:00Z`,
-            desc: e.info || e.description || "",
-            ticketUrl: e.url,
-            image: bestImage,
-            status: e.dates.status?.code || "onsale",
-            source: "ticketmaster.com",
-            provider: "Ticketmaster",
-            added: Date.now(),
-          };
-        });
-
-        mergeAndDeDuplicate(parsed);
-        const updateDate = new Date();
-        setLastUpdated(updateDate);
-        localStorage.setItem("marquee_last_updated", updateDate.toISOString());
-        setApiSuccessNote("Connected to live Ticketmaster stream.");
-      } else {
-        if (resJson.error) {
-          setErrorMessage(resJson.error);
-        } else {
-          setErrorMessage("No upcoming events returned by Ticketmaster.");
-        }
-      }
-    } catch (err: any) {
-      console.error(err);
-      setErrorMessage("Could not contact server API. Please check configuration & port mappings.");
-    } finally {
-      if (!isBackground) {
-        setLoadingProgress(100);
-        setTimeout(() => {
-          setLoading(false);
-          setLoadingProgress(0);
-        }, 300);
-      }
-    }
-  };
-
-  const fetchGeminiSearch = async () => {
-    setLoading(true);
-    setLoadingProgress(20);
-    setErrorMessage(null);
-    setApiSuccessNote(null);
-
-    try {
-      const response = await fetch("/api/marquee", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-gemini-key": geminiKey,
-        },
-        body: JSON.stringify({ action: "gemini" }),
-      });
-
-      setLoadingProgress(60);
-      const resJson = await response.json();
-      setLoadingProgress(90);
-
-      if (resJson.success && Array.isArray(resJson.events)) {
-        const parsed: EventItem[] = resJson.events.map((e: any): EventItem => {
-          const hostname = safeGetHostname(e.ticketUrl, "wnyc.org");
-          const VALID_CATS = ["concerts", "broadway", "classical", "sports", "other"];
-          const rawCat = (e.category || "").toLowerCase();
-          const mappedCat: EventCategory = VALID_CATS.includes(rawCat) ? (rawCat as EventCategory) : "other";
-          return {
-            id: `gemini_${Math.random().toString(36).substring(2, 9)}`,
-            title: e.title,
-            artist: e.artist || "",
-            venue: e.venue || "NYC Venue",
-            area: SEED_VENU_AREAS[e.venue] || "New York",
-            cat: mappedCat,
-            price: e.price || "$20+",
-            start: `${cleanAndFormatDate(e.date)}T${e.time || "19:30"}:00Z`,
-            desc: e.description || "",
-            ticketUrl: e.ticketUrl,
-            image: "", // emoji gradients resolved on render
-            source: hostname,
-            provider: "Gemini",
-            added: Date.now(),
-            tags: [],
-          };
-        });
-
-        mergeAndDeDuplicate(parsed);
-        const updateDate = new Date();
-        setLastUpdated(updateDate);
-        localStorage.setItem("marquee_last_updated", updateDate.toISOString());
-        if (resJson.warning) {
-          setApiSuccessNote(resJson.warning);
-        } else {
-          setApiSuccessNote("Grounded search completed! Merged live local events.");
-        }
-      } else {
-        setErrorMessage(resJson.error || "No response received from your grounded Gemini search engine.");
-      }
-    } catch (err: any) {
-      console.error(err);
-      setErrorMessage(err.message || "Failed to call Gemini AI grounding route.");
-    } finally {
-      setLoadingProgress(100);
-      setTimeout(() => {
-        setLoading(false);
-        setLoadingProgress(0);
-      }, 300);
-    }
-  };
-
-  const fetchGoogleEvents = async (customQuery?: string) => {
-    const q = (customQuery || googleEventsQuery).trim();
-    if (!q) {
-      setErrorMessage("Please enter an event query to search the Google Events API (NYC).");
-      return;
-    }
-    setSearchingGoogleEvents(true);
-    setLoading(true);
-    setLoadingProgress(20);
-    setErrorMessage(null);
-    setGoogleEventsSuccessNote(null);
-    setApiSuccessNote(null);
-
-    try {
-      const response = await fetch("/api/marquee", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-gemini-key": geminiKey,
-          "x-serpapi-key": serpapiKey,
-        },
-        body: JSON.stringify({ action: "googleEvents", payload: { query: q, serpapiKey } }),
-      });
-
-      setLoadingProgress(60);
-      const resJson = await response.json();
-      setLoadingProgress(90);
-
-      if (resJson.success && Array.isArray(resJson.events)) {
-        if (resJson.events.length === 0) {
-          setErrorMessage(`No matching events in New York City found for "${q}". Try another search (e.g., "jazz", "opera", "comedy").`);
-        } else {
-          const parsed: EventItem[] = resJson.events.map((e: any): EventItem => {
-            const hostname = safeGetHostname(e.ticketUrl, "google.com/events");
-            const VALID_CATS = ["concerts", "broadway", "classical", "sports", "other"];
-            const rawCat = (e.category || "").toLowerCase();
-            const mappedCat: EventCategory = VALID_CATS.includes(rawCat) ? (rawCat as EventCategory) : "other";
-            
-            // Auto add the clean search term as a custom tag
-            const qTag = q.toLowerCase().replace(/[^a-z0-str0-9]/g, "");
-            
-            return {
-              id: `google_${Math.random().toString(36).substring(2, 9)}`,
-              title: e.title,
-              artist: e.artist || "",
-              venue: e.venue || "NYC Venue",
-              area: SEED_VENU_AREAS[e.venue] || "New York",
-              cat: mappedCat,
-              price: e.price || "Check Site",
-              start: `${cleanAndFormatDate(e.date)}T${e.time || "19:00"}:00Z`,
-              desc: e.description || "",
-              ticketUrl: e.ticketUrl,
-              image: "",
-              source: hostname,
-              provider: resJson.source === "serpapi" ? "SerpApi" : "Gemini",
-              added: Date.now(),
-              tags: [qTag].filter(Boolean),
-            };
-          });
-
-          mergeAndDeDuplicate(parsed);
-          const updateDate = new Date();
-          setLastUpdated(updateDate);
-          localStorage.setItem("marquee_last_updated", updateDate.toISOString());
-          if (resJson.warning) {
-            setGoogleEventsSuccessNote(`Offline Cache active: ${resJson.warning}`);
-            setApiSuccessNote(resJson.warning);
-          } else {
-            setGoogleEventsSuccessNote(`Successfully imported ${parsed.length} NYC Google Events matching "${q}"!`);
-            setApiSuccessNote(`Google Events synced! Imported ${parsed.length} NYC matchings.`);
-          }
-        }
-      } else {
-        setErrorMessage(resJson.error || "No events received from Google Events search.");
-      }
-    } catch (err: any) {
-      console.error(err);
-      setErrorMessage(err.message || "Failed to search Google Events API.");
-    } finally {
-      setLoadingProgress(100);
-      setSearchingGoogleEvents(false);
-      setTimeout(() => {
-        setLoading(false);
-        setLoadingProgress(0);
-      }, 300);
-    }
-  };
-
-  // Map a server-parsed raw event into our EventItem shape.
-  const mapParsedEvent = (evt: any, sourceUrl: string, provider: EventItem["provider"] = "Gemini"): EventItem => {
-    const VALID_CATS = ["concerts", "broadway", "classical", "sports", "other"];
-    const rawCat = (evt.category || "").toLowerCase();
-    const mappedCat: EventCategory = VALID_CATS.includes(rawCat) ? (rawCat as EventCategory) : "other";
-    return {
-      id: `custom_${Math.random().toString(36).substring(2, 9)}`,
-      title: evt.title || "Untitled Event",
-      artist: evt.artist || "",
-      venue: evt.venue || "NYC Venue",
-      area: SEED_VENU_AREAS[evt.venue] || "New York",
-      cat: mappedCat,
-      price: evt.price || "Check Site",
-      start: `${cleanAndFormatDate(evt.date)}T${evt.time || "19:00"}:00Z`,
-      desc: evt.description || "",
-      ticketUrl: evt.ticketUrl || sourceUrl,
-      image: "",
-      source: hostOf(sourceUrl),
-      provider,
-      added: Date.now(),
-      tags: [],
-    };
-  };
-
-  const recordSourceStatus = (
-    url: string,
-    patch: Partial<{ status: "ok" | "failed" | "pending"; count: number; lastSync: number | null; error?: string }>
-  ) => {
-    setSourceStatus((prev) => ({
-      ...prev,
-      [url]: { status: "pending", count: 0, lastSync: null, ...prev[url], ...patch },
-    }));
-  };
-
-  // Fetch + import a single source URL. Records per-source status, returns parsed count.
-  const importFromUrl = async (src: string): Promise<{ count: number; method?: string; error?: string }> => {
-    recordSourceStatus(src, { status: "pending" });
-    try {
-      const response = await fetch("/api/marquee", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "x-gemini-key": geminiKey },
-        body: JSON.stringify({ action: "parseUrl", payload: { url: src } }),
-      });
-      const resJson = await response.json();
-      if (resJson.success && Array.isArray(resJson.events) && resJson.events.length > 0) {
-        const parsed = resJson.events.map((evt: any) => mapParsedEvent(evt, src));
-        mergeAndDeDuplicate(parsed);
-        recordSourceStatus(src, { status: "ok", count: parsed.length, lastSync: Date.now(), error: undefined });
-        return { count: parsed.length, method: resJson.method };
-      }
-      const errMsg = resJson.errorCode === "NO_GEMINI_KEY"
-        ? "Needs a Gemini API key"
-        : (resJson.error || "No events found on this page.");
-      recordSourceStatus(src, { status: "failed", lastSync: Date.now(), error: errMsg });
-      return { count: 0, error: errMsg };
-    } catch (err: any) {
-      const errMsg = err?.message || "Network error";
-      recordSourceStatus(src, { status: "failed", lastSync: Date.now(), error: errMsg });
-      return { count: 0, error: errMsg };
-    }
-  };
-
-  // Add one or more sources (newline / comma separated), persist them, and import.
-  const addSources = async (rawInput: string) => {
-    const candidates = rawInput.split(/[\n,]+/).map((s) => s.trim()).filter(Boolean);
-    const normalized = [...new Set(candidates.map(normalizeUrl).filter((u): u is string => !!u))];
-    if (normalized.length === 0) {
-      setErrorMessage("That doesn't look like a valid web address. Try something like https://www.wnyc.org/events/");
-      return;
-    }
-    setAddingSource(true);
-    setErrorMessage(null);
-    setApiSuccessNote(null);
-
-    // De-dupe (case-insensitive) against existing sources, but still re-import all requested URLs.
-    const existingLower = new Set(userSources.map((s) => s.toLowerCase()));
-    const toAdd = normalized.filter((u) => !existingLower.has(u.toLowerCase()));
-    if (toAdd.length > 0) {
-      const nextSources = [...userSources, ...toAdd];
-      setUserSources(nextSources);
-    }
-
-    let totalImported = 0;
-    let keyErr = false;
-    for (const url of normalized) {
-      const r = await importFromUrl(url);
-      totalImported += r.count;
-      if (r.count === 0 && r.error && /api key|not configured|quota|rate limit/i.test(r.error)) keyErr = true;
-    }
-
-    if (totalImported > 0) {
-      setApiSuccessNote(`Imported ${totalImported} event(s) from ${normalized.length} source(s).`);
-      setLastUpdated(new Date());
-      setAddUrlInput("");
-    } else if (keyErr) {
-      setErrorMessage("No structured listings were found and AI extraction needs a Gemini API key. Add one in Settings to read arbitrary pages.");
-    } else {
-      setErrorMessage("Couldn't extract events from the page(s). The source was saved — try a more specific listings URL, or 'Sync All' again later.");
-    }
-    setAddingSource(false);
-  };
-
-  const parseCustomPage = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!addUrlInput.trim()) return;
-    await addSources(addUrlInput);
-  };
-
-  const removeCustomSource = (sourceUrl: string) => {
-    const nextSources = userSources.filter((s) => s !== sourceUrl);
-    setUserSources(nextSources);
-    setSourceStatus((prev) => {
-      const next = { ...prev };
-      delete next[sourceUrl];
-      return next;
-    });
-    const hostname = hostOf(sourceUrl);
-    setEvents((prev) => prev.filter((e) => e.source !== hostname));
-  };
-
-  const syncAllCustomSources = async () => {
-    if (userSources.length === 0) return;
-    setSyncingCustom(true);
-    setErrorMessage(null);
-    setApiSuccessNote(null);
-    setSyncProgress({ done: 0, total: userSources.length });
-    let totalImported = 0;
-    let failedCount = 0;
-
-    for (let i = 0; i < userSources.length; i++) {
-      const src = userSources[i];
-      setSyncProgressMsg(`Syncing ${hostOf(src)} (${i + 1}/${userSources.length})...`);
-      const r = await importFromUrl(src);
-      totalImported += r.count;
-      if (r.count === 0) failedCount++;
-      setSyncProgress({ done: i + 1, total: userSources.length });
-    }
-
-    if (totalImported > 0) {
-      setApiSuccessNote(`Synchronized ${totalImported} new event(s) across your custom sources.`);
-      setLastUpdated(new Date());
-    } else if (failedCount > 0) {
-      setErrorMessage("Couldn't pull events from your custom sources. Many sites need a Gemini API key for AI extraction — add one in Settings.");
-    } else {
-      setApiSuccessNote("All custom websites are currently up to date!");
-    }
-    setSyncingCustom(false);
-    setSyncProgressMsg("");
-    setSyncProgress({ done: 0, total: 0 });
   };
 
   // Manually add an event the user types in (for pages that can't be scraped).
@@ -1388,14 +906,9 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-slate-50 dark:bg-[#000000] text-slate-900 dark:text-zinc-100 transition-colors duration-300 flex flex-col antialiased">
-      {/* Dynamic Top Progress Loading indicator */}
+      {/* Top loading indicator while the feed loads */}
       {loading && (
-        <div className="fixed top-0 left-0 right-0 h-1 z-[110] bg-slate-200 dark:bg-zinc-800">
-          <div
-            className="h-full bg-gradient-to-r from-blue-500 to-indigo-600 transition-all duration-300"
-            style={{ width: `${loadingProgress}%` }}
-          />
-        </div>
+        <div className="fixed top-0 left-0 right-0 h-1 z-[110] bg-gradient-to-r from-blue-500 to-indigo-600 animate-pulse" />
       )}
 
       {/* STICKY GLASS NAVIGATION BAR */}
