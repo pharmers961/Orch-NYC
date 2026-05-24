@@ -40,20 +40,27 @@ export function categorizeEvent(title: string, description: string, venue = ""):
   const hay = `${title || ""} ${description || ""}`.toLowerCase();
   const v = (venue || "").toLowerCase();
 
-  // Venue rules (only for venues that are reliably one genre).
-  if (/(carnegie hall|metropolitan opera|met opera|alice tully|david geffen hall|nyphil|new york philharmonic)/.test(v)) return "classical";
+  // Venue rules first (strongest signal for reliably single-genre venues).
+  if (/(carnegie hall|metropolitan opera|met opera|alice tully|david geffen hall|nyphil|new york philharmonic|zankel hall|stern auditorium)/.test(v)) return "classical";
+  if (/(joyce theater|new york city ballet|alvin ailey|\bballet\b)/.test(v)) return "dance";
   if (/(blue note|bowery ballroom|brooklyn steel)/.test(v)) return "concerts";
   if (/(public theater|playbill|broadway)/.test(v)) return "broadway";
-  if (/(\bmoma\b|museum|gallery|guggenheim|whitney)/.test(v)) return "arts";
+  if (/(\bmoma\b|\bmuseum\b|\bgallery\b|guggenheim|whitney)/.test(v)) return "arts";
+  if (/\blibrary\b/.test(v)) return "talks";
 
-  // Keyword rules, specific -> general.
+  // Fitness / wellness -> other (prevents these from grabbing dance/other buckets).
+  if (/(\byoga\b|pilates|zumba|workout|\bfitness\b|bootcamp|meditation|wellness)/.test(hay)) return "other";
+
+  // Keyword rules, most specific -> most general.
   if (/(\bvs\.?\b|yankees|mets|knicks|nets|rangers|liberty|\bgame\b|stadium|playoff|nba|nfl|nhl|mlb)/.test(hay)) return "sports";
   if (/(philharmonic|opera|symphony|orchestra|chamber|recital|classical|quartet|sonata|concerto)/.test(hay)) return "classical";
-  if (/(ballet|\bdance\b|choreograph|nutcracker|\btap\b)/.test(hay)) return "dance";
-  if (/(lecture|\btalk\b|\breading\b|conversation|\bpanel\b|podcast|\bauthor\b|symposium|seminar|q&a|live taping|radiolab|book launch)/.test(hay)) return "talks";
-  if (/(exhibit|exhibition|gallery|museum|installation|retrospective|sculpture|painting|photography)/.test(hay)) return "arts";
+  // Dance: avoid bare "dance" so band names ("Dance Gavin Dance") / "dance party" don't misfire.
+  if (/(\bballet\b|choreograph|nutcracker|danceafrica|\bballroom\b|(modern|contemporary|tap|swing|salsa|tango|flamenco)\s+danc|danc\w*\s+(company|theat(?:er|re)|performance|troupe)|tap\s+(?:city|festival))/.test(hay)) return "dance";
+  // Talks: require an explicit talk/reading signal, not a bare "talk" appearing in prose.
+  if (/(\blecture\b|artist talk|author talk|talkback|in conversation|panel discussion|podcast|symposium|q&a|live taping|radiolab|radio hour|book launch|reading series|poetry reading|\bauthors?\b)/.test(hay)) return "talks";
+  if (/(exhibit|exhibition|\bgallery\b|\bmuseum\b|installation|retrospective|sculpture|painting|photography)/.test(hay)) return "arts";
   if (/(broadway|theater|theatre|\bplay\b|musical|comedy|drama|cabaret|improv|stand.?up)/.test(hay)) return "broadway";
-  if (/(concert|music|jazz|festival|\bband\b|\blive\b|\bdj\b|rock|hip.?hop|set)/.test(hay)) return "concerts";
+  if (/(concert|\bmusic\b|jazz|festival|\bband\b|\blive\b|\bdj\b|rock|hip.?hop|\bset\b)/.test(hay)) return "concerts";
   return "other";
 }
 

@@ -71,11 +71,19 @@ export function useEvents() {
         });
         if (existingIdx > -1) {
           const existing = allEvents[existingIdx];
-          const existingScore =
-            (existing.provider === "Ticketmaster" ? 2 : 0) + (existing.desc ? 1 : 0) + (existing.image ? 1 : 0);
-          const newScore =
-            (newEvent.provider === "Ticketmaster" ? 2 : 0) + (newEvent.desc ? 1 : 0) + (newEvent.image ? 1 : 0);
-          if (newScore > existingScore) allEvents[existingIdx] = { ...existing, ...newEvent };
+          const mergedTags = [...new Set([...(existing.tags || []), ...(newEvent.tags || [])])];
+          if (existing.id === newEvent.id) {
+            // Same event re-published by the feed: the feed is authoritative for
+            // cat/price/status/etc., so refresh it (keeping user tags + original added time).
+            allEvents[existingIdx] = { ...newEvent, tags: mergedTags, added: existing.added };
+          } else {
+            // Cross-source duplicate (matched on title+date): keep the richer record.
+            const existingScore =
+              (existing.provider === "Ticketmaster" ? 2 : 0) + (existing.desc ? 1 : 0) + (existing.image ? 1 : 0);
+            const newScore =
+              (newEvent.provider === "Ticketmaster" ? 2 : 0) + (newEvent.desc ? 1 : 0) + (newEvent.image ? 1 : 0);
+            if (newScore > existingScore) allEvents[existingIdx] = { ...existing, ...newEvent, tags: mergedTags };
+          }
         } else {
           allEvents.push(newEvent);
         }
