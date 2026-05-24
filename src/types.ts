@@ -20,7 +20,7 @@ export interface EventItem {
   image: string;
   status?: string; // e.g. 'onsale', 'cancelled', 'offsale', etc.
   source: string; // Source portal or site URL (e.g., Ticketmaster, wnyc.org, carnegiehall.org)
-  provider: "Ticketmaster" | "Gemini" | "SerpApi" | "Manual";
+  provider: "Ticketmaster" | "Gemini" | "SerpApi" | "Manual" | "NYC Open Data";
   added: number; // timestamp
   tags?: string[]; // Optional user/parsing tags
 }

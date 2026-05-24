@@ -9,7 +9,7 @@
 import { writeFileSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
-import { fetchWithRetry, extractJsonLdEvents, geminiExtractEventsFromUrl } from "../serverLib";
+import { fetchWithRetry, extractJsonLdEvents, geminiExtractEventsFromUrl, categorizeEvent } from "../serverLib";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, "..");
@@ -21,6 +21,30 @@ function readSources(): string[] {
     const parsed = JSON.parse(raw);
     const list = Array.isArray(parsed) ? parsed : parsed.sources;
     return Array.isArray(list) ? [...new Set(list.filter((s) => typeof s === "string"))] : [];
+  } catch {
+    return [];
+  }
+}
+
+interface SocrataCfg {
+  id: string;            // Socrata dataset id, e.g. "fudw-fgrp"
+  source?: string;       // label shown in the Sources filter
+  dateField?: string;
+  titleField?: string;
+  venueField?: string;
+  descField?: string;
+  urlField?: string;
+  category?: string;
+  price?: string;
+  limit?: number;
+}
+
+function readSocrataSources(): SocrataCfg[] {
+  try {
+    const raw = readFileSync(path.join(ROOT, "socrata-sources.json"), "utf8");
+    const parsed = JSON.parse(raw);
+    const list = Array.isArray(parsed) ? parsed : parsed.datasets;
+    return Array.isArray(list) ? list.filter((d: any) => d && typeof d.id === "string") : [];
   } catch {
     return [];
   }
@@ -112,45 +136,60 @@ function normalizeEvent(raw: any, sourceUrl: string, provider: string, sourceHos
   };
 }
 
+function mapTmEvent(e: any) {
+  const c = e.classifications?.[0];
+  let category = "concerts";
+  if (c?.segment?.name === "Sports") category = "sports";
+  else if (c?.segment?.name === "Music") category = "concerts";
+  else if (["Classical", "Opera", "Orchestral"].includes(c?.genre?.name)) category = "classical";
+  else category = "broadway";
+  const venue = e._embedded?.venues?.[0]?.name || "NYC Venue";
+  let price = "Price TBA";
+  if (e.priceRanges?.[0]) {
+    const min = Math.round(e.priceRanges[0].min || 0);
+    const max = Math.round(e.priceRanges[0].max || 0);
+    price = min === max ? `$${min}` : `$${min}-$${max}`;
+  }
+  const imgs = e.images ? [...e.images].sort((a: any, b: any) => b.width - a.width) : [];
+  const image = imgs.find((i: any) => i.ratio === "16_9")?.url || imgs[0]?.url || "";
+  const start = e.dates?.start?.dateTime || `${e.dates?.start?.localDate}T19:00:00Z`;
+  return {
+    title: e.name,
+    artist: e._embedded?.attractions?.[0]?.name || "",
+    venue,
+    area: e._embedded?.venues?.[0]?.city?.name || "New York",
+    category,
+    date: start.split("T")[0],
+    time: (start.split("T")[1] || "19:00").slice(0, 5),
+    price,
+    ticketUrl: e.url,
+    image,
+    status: e.dates?.status?.code || "onsale",
+    description: e.info || e.description || "",
+  };
+}
+
+// Page through the Ticketmaster Discovery API for NYC (dmaId 345) to pull far
+// more than one page of events. Deep paging is capped at 1000 results.
 async function fetchTicketmaster(key: string): Promise<any[]> {
   const now = new Date().toISOString().split(".")[0] + "Z";
-  const url = `https://app.ticketmaster.com/discovery/v2/events.json?apikey=${key}&dmaId=345&sort=date,asc&size=100&startDateTime=${now}&locale=*`;
-  const res = await fetchWithRetry(url);
-  if (!res.ok) throw new Error(`Ticketmaster ${res.status}`);
-  const data: any = await res.json();
-  const raw = data?._embedded?.events || [];
-  return raw.map((e: any) => {
-    const c = e.classifications?.[0];
-    let category = "concerts";
-    if (c?.segment?.name === "Sports") category = "sports";
-    else if (c?.segment?.name === "Music") category = "concerts";
-    else if (["Classical", "Opera", "Orchestral"].includes(c?.genre?.name)) category = "classical";
-    else category = "broadway";
-    const venue = e._embedded?.venues?.[0]?.name || "NYC Venue";
-    let price = "Price TBA";
-    if (e.priceRanges?.[0]) {
-      const min = Math.round(e.priceRanges[0].min || 0);
-      const max = Math.round(e.priceRanges[0].max || 0);
-      price = min === max ? `$${min}` : `$${min}-$${max}`;
+  const size = 100;
+  const maxPages = 5;
+  const raw: any[] = [];
+  for (let page = 0; page < maxPages; page++) {
+    const url = `https://app.ticketmaster.com/discovery/v2/events.json?apikey=${key}&dmaId=345&sort=date,asc&size=${size}&page=${page}&startDateTime=${now}&locale=*`;
+    const res = await fetchWithRetry(url);
+    if (!res.ok) {
+      if (page === 0) throw new Error(`Ticketmaster ${res.status}`);
+      break;
     }
-    const imgs = e.images ? [...e.images].sort((a: any, b: any) => b.width - a.width) : [];
-    const image = imgs.find((i: any) => i.ratio === "16_9")?.url || imgs[0]?.url || "";
-    const start = e.dates?.start?.dateTime || `${e.dates?.start?.localDate}T19:00:00Z`;
-    return {
-      title: e.name,
-      artist: e._embedded?.attractions?.[0]?.name || "",
-      venue,
-      area: e._embedded?.venues?.[0]?.city?.name || "New York",
-      category,
-      date: start.split("T")[0],
-      time: (start.split("T")[1] || "19:00").slice(0, 5),
-      price,
-      ticketUrl: e.url,
-      image,
-      status: e.dates?.status?.code || "onsale",
-      description: e.info || e.description || "",
-    };
-  });
+    const data: any = await res.json();
+    const events = data?._embedded?.events || [];
+    raw.push(...events);
+    const totalPages = data?.page?.totalPages ?? 1;
+    if (events.length < size || page + 1 >= totalPages) break;
+  }
+  return raw.map(mapTmEvent);
 }
 
 async function extractFromUrl(url: string, geminiKey?: string): Promise<any[]> {
@@ -183,6 +222,98 @@ async function extractFromUrl(url: string, geminiKey?: string): Promise<any[]> {
   }
 }
 
+// Pull events from a NYC Open Data (Socrata) dataset via the SODA API.
+// Structured JSON — no scraping or AI, so it's reliable. Field names vary by
+// dataset, so we use the configured field then fall back to common names.
+function pickField(row: any, configured: string | undefined, candidates: string[]): any {
+  if (configured && row[configured] != null) return row[configured];
+  for (const k of candidates) if (row[k] != null) return row[k];
+  return undefined;
+}
+
+async function fetchSocrata(cfg: SocrataCfg, appToken?: string): Promise<any[]> {
+  const url = `https://data.cityofnewyork.us/resource/${cfg.id}.json?$limit=${cfg.limit || 500}`;
+  const headers: any = { Accept: "application/json" };
+  if (appToken) headers["X-App-Token"] = appToken;
+  const res = await fetchWithRetry(url, { headers });
+  if (!res.ok) throw new Error(`Socrata ${cfg.id} HTTP ${res.status}`);
+  const rows: any = await res.json();
+  if (!Array.isArray(rows)) return [];
+  const out: any[] = [];
+  for (const row of rows) {
+    let rawDate = pickField(row, cfg.dateField, ["start_date_time", "start_date", "startdate", "date", "datetime", "start", "event_date", "date_time", "performance_date"]);
+    if (rawDate && typeof rawDate === "object") rawDate = rawDate.$date || rawDate.date || "";
+    const title = pickField(row, cfg.titleField, ["title", "name", "event_name", "eventname", "program", "headline", "show"]);
+    if (!rawDate || !title) continue;
+    const dt = new Date(rawDate);
+    if (isNaN(dt.getTime())) continue;
+    const iso = dt.toISOString();
+    const venue = pickField(row, cfg.venueField, ["venue", "location", "park_name", "place", "address", "borough", "site"]);
+    const desc = pickField(row, cfg.descField, ["snippet", "description", "summary", "details", "event_description"]);
+    const link = pickField(row, cfg.urlField, ["event_url", "url", "link", "website", "permalink", "tickets"]);
+    out.push({
+      title: String(title).trim(),
+      artist: "",
+      venue: venue ? String(venue) : "New York",
+      category: cfg.category || "other",
+      date: iso.split("T")[0],
+      time: iso.split("T")[1].slice(0, 5),
+      price: cfg.price || "Check Site",
+      ticketUrl: typeof link === "string" && link ? link : `https://data.cityofnewyork.us/d/${cfg.id}`,
+      description: typeof desc === "string" ? desc.replace(/<[^>]+>/g, "").trim().slice(0, 400) : "",
+    });
+  }
+  return out;
+}
+
+// SerpApi Google Events engine — structured NYC event results.
+// Note: SerpApi's free tier is ~100 searches/month, so 1 call per hourly run
+// (~720/month) will exceed it. Use a daily schedule or a paid plan if free.
+async function fetchSerpApi(key: string): Promise<any[]> {
+  const year = new Date().getFullYear();
+  const url = `https://serpapi.com/search.json?engine=google_events&q=${encodeURIComponent("events in New York")}&hl=en&gl=us&api_key=${key}`;
+  const res = await fetchWithRetry(url);
+  if (!res.ok) throw new Error(`SerpApi HTTP ${res.status}`);
+  const data: any = await res.json();
+  const results = Array.isArray(data.events_results) ? data.events_results : [];
+  const out: any[] = [];
+  for (const e of results) {
+    const venue = e.venue?.name || (Array.isArray(e.address) ? e.address[0] : e.address) || "New York";
+    let ticketUrl = e.link || "";
+    if (Array.isArray(e.ticket_info) && e.ticket_info.length) {
+      ticketUrl = e.ticket_info[0].link || e.ticket_info[0].source_link || e.link || "";
+    }
+    const whenStr = e.date?.when || e.date?.start_date || "";
+    let dateVal = "";
+    let timeVal = "19:00";
+    if (whenStr) {
+      const cleaned = String(whenStr).replace(/^[A-Za-z]{3},\s*/, "").split(/[–-]/)[0].trim();
+      const dt = new Date(`${cleaned} ${year}`);
+      if (!isNaN(dt.getTime())) dateVal = dt.toISOString().split("T")[0];
+      const tm = String(whenStr).match(/(\d{1,2}):(\d{2})\s*(AM|PM)/i);
+      if (tm) {
+        let h = parseInt(tm[1], 10);
+        if (/pm/i.test(tm[3]) && h !== 12) h += 12;
+        if (/am/i.test(tm[3]) && h === 12) h = 0;
+        timeVal = `${String(h).padStart(2, "0")}:${tm[2]}`;
+      }
+    }
+    if (!dateVal || !e.title) continue;
+    out.push({
+      title: e.title,
+      artist: "",
+      venue,
+      category: categorizeEvent(e.title || "", e.description || ""),
+      date: dateVal,
+      time: timeVal,
+      price: e.ticket_info?.[0]?.price || "Check Site",
+      ticketUrl: ticketUrl || `https://www.google.com/search?q=${encodeURIComponent(e.title)}`,
+      description: e.description || "",
+    });
+  }
+  return out;
+}
+
 async function main() {
   const tmKey = process.env.TICKETMASTER_KEY;
   const geminiKey = process.env.GEMINI_API_KEY;
@@ -211,6 +342,34 @@ async function main() {
     } catch (err) {
       console.warn(`Failed ${src}:`, (err as any)?.message);
       perSource[hostOf(src)] = 0;
+    }
+  }
+
+  // SerpApi Google Events — structured NYC results (optional).
+  const serpKey = process.env.SERPAPI_KEY;
+  if (serpKey) {
+    try {
+      const rows = await fetchSerpApi(serpKey);
+      rows.forEach((e) => all.push(normalizeEvent(e, e.ticketUrl, "SerpApi", "google events (serpapi)")));
+      perSource["google events (serpapi)"] = rows.length;
+      console.log(`SerpApi: ${rows.length} events`);
+    } catch (err) {
+      console.warn("SerpApi failed:", (err as any)?.message);
+    }
+  }
+
+  // NYC Open Data (Socrata) datasets — reliable structured JSON.
+  const socToken = process.env.SOCRATA_APP_TOKEN;
+  for (const cfg of readSocrataSources()) {
+    const label = cfg.source || "data.cityofnewyork.us";
+    try {
+      const rows = await fetchSocrata(cfg, socToken);
+      rows.forEach((e) => all.push(normalizeEvent(e, e.ticketUrl, "NYC Open Data", label)));
+      perSource[label] = (perSource[label] || 0) + rows.length;
+      console.log(`${label} (${cfg.id}): ${rows.length} events`);
+    } catch (err) {
+      console.warn(`Socrata ${cfg.id} failed:`, (err as any)?.message);
+      perSource[label] = perSource[label] || 0;
     }
   }
 
