@@ -86,7 +86,7 @@ function dedupeKey(title: string, dateStr: string): string {
 
 const VALID_CATS = ["concerts", "broadway", "classical", "sports", "other"];
 
-function normalizeEvent(raw: any, sourceUrl: string, provider: string) {
+function normalizeEvent(raw: any, sourceUrl: string, provider: string, sourceHost?: string) {
   const cat = VALID_CATS.includes((raw.category || "").toLowerCase()) ? raw.category.toLowerCase() : "other";
   const dateStr = rollForwardIfPast(cleanDate(raw.date));
   const start = `${dateStr}T${raw.time || "19:00"}:00Z`;
@@ -106,7 +106,7 @@ function normalizeEvent(raw: any, sourceUrl: string, provider: string) {
     ticketUrl: raw.ticketUrl || sourceUrl,
     image: raw.image || "",
     status: raw.status || "onsale",
-    source: hostOf(sourceUrl),
+    source: sourceHost || hostOf(sourceUrl),
     sourceUrl,
     provider,
   };
@@ -192,7 +192,7 @@ async function main() {
   if (tmKey) {
     try {
       const tm = await fetchTicketmaster(tmKey);
-      tm.forEach((e) => all.push(normalizeEvent(e, e.ticketUrl || "https://www.ticketmaster.com", "Ticketmaster")));
+      tm.forEach((e) => all.push(normalizeEvent(e, e.ticketUrl || "https://www.ticketmaster.com", "Ticketmaster", "ticketmaster.com")));
       perSource["ticketmaster.com"] = tm.length;
       console.log(`Ticketmaster: ${tm.length} events`);
     } catch (err) {
