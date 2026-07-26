@@ -18,11 +18,11 @@ export function Nav({
       className="sticky top-0 z-50 h-14 flex items-center justify-between gap-2 px-4 sm:px-6 bg-white/70 dark:bg-black/70 backdrop-blur-xl border-b border-black/10 dark:border-zinc-800/60 font-sans"
     >
       <div className="flex items-center gap-3">
-        <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-[#0071e3] to-[#5e5ce6] flex items-center justify-center shadow-md">
-          <span className="text-white font-bold text-lg leading-none font-display">O</span>
+        <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-emerald-500 to-[#0071e3] flex items-center justify-center shadow-md">
+          <span className="text-white font-bold text-lg leading-none font-display">🌱</span>
         </div>
-        <span className="font-extrabold text-lg tracking-tight bg-gradient-to-r from-slate-900 via-slate-700 to-indigo-900 dark:from-white dark:to-zinc-400 bg-clip-text text-transparent">
-          Orch
+        <span className="font-extrabold text-lg tracking-tight bg-gradient-to-r from-slate-900 via-slate-700 to-emerald-900 dark:from-white dark:to-zinc-400 bg-clip-text text-transparent">
+          Sprout Scout
         </span>
       </div>
 

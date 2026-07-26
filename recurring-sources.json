@@ -1,0 +1,203 @@
+{
+  "_comment": "Curated fixed schedules expanded into concrete events by scripts/ingest.ts (next ~7 weeks). Use these for reliable programs on bot-protected sites (store kids' workshops) and known weekly series (farmers markets, summer concerts). schedule.day: 0=Sunday..6=Saturday; time is Pacific; ordinals apply to freq=monthly; months restricts seasonal series. Verify seasonal date ranges each year.",
+  "events": [
+    {
+      "title": "Free Crafts for Kids at Lakeshore Learning",
+      "venue": "Lakeshore Learning",
+      "area": "Walnut Creek",
+      "category": "crafts",
+      "price": "Free",
+      "url": "https://www.lakeshorelearning.com/stores/events/",
+      "source": "lakeshorelearning.com",
+      "desc": "Drop-in craft table every Saturday, 11am-3pm. Ages 3+, no registration needed — a new themed craft each week.",
+      "schedule": { "freq": "weekly", "day": 6, "time": "11:00" }
+    },
+    {
+      "title": "Home Depot Kids Workshop (Concord)",
+      "venue": "The Home Depot, Concord",
+      "area": "Concord",
+      "category": "crafts",
+      "price": "Free",
+      "url": "https://www.homedepot.com/c/kids-workshop",
+      "source": "homedepot.com",
+      "desc": "Free hands-on build workshop the first Saturday of each month, 9am-12pm while supplies last. Kit, apron, pin and certificate included. Register online.",
+      "schedule": { "freq": "monthly", "day": 6, "ordinals": [1], "time": "09:00" }
+    },
+    {
+      "title": "Lowe's Kids Workshop (Concord)",
+      "venue": "Lowe's, Concord",
+      "area": "Concord",
+      "category": "crafts",
+      "price": "Free",
+      "url": "https://www.lowes.com/diy-projects-and-ideas/workshops",
+      "source": "lowes.com",
+      "desc": "Free monthly kids' build workshop (typically third Saturday, 10am sessions). Ages 4-11. Registration required via MyLowe's Rewards.",
+      "schedule": { "freq": "monthly", "day": 6, "ordinals": [3], "time": "10:00" }
+    },
+    {
+      "title": "Michaels Sunday MAKEbreak (Pleasant Hill)",
+      "venue": "Michaels, Pleasant Hill",
+      "area": "Pleasant Hill",
+      "category": "crafts",
+      "price": "Free",
+      "url": "https://www.michaels.com/events-and-services",
+      "source": "michaels.com",
+      "desc": "Free in-store family craft session, typically first and third Sundays 2-4pm. Check the store's events page for this month's project.",
+      "schedule": { "freq": "monthly", "day": 0, "ordinals": [1, 3], "time": "14:00" }
+    },
+    {
+      "title": "Saturday Storytime at Barnes & Noble",
+      "venue": "Barnes & Noble, Walnut Creek",
+      "area": "Walnut Creek",
+      "category": "storytime",
+      "price": "Free",
+      "url": "https://stores.barnesandnoble.com/store/3415",
+      "source": "barnesandnoble.com",
+      "desc": "Weekly storytime at the Plaza Escuela store, Saturdays at 11am.",
+      "schedule": { "freq": "weekly", "day": 6, "time": "11:00" }
+    },
+    {
+      "title": "Walnut Creek Farmers Market",
+      "venue": "Locust Street, Downtown Walnut Creek",
+      "area": "Walnut Creek",
+      "category": "festivals",
+      "price": "Free",
+      "url": "https://www.cccfm.org/walnut-creek-market/",
+      "source": "cccfm.org",
+      "desc": "Year-round Sunday farmers market, 9am-1pm — produce, food stands and stroller-friendly wandering.",
+      "schedule": { "freq": "weekly", "day": 0, "time": "09:00" }
+    },
+    {
+      "title": "Orinda Farmers Market",
+      "venue": "Orinda Way, Orinda",
+      "area": "Orinda",
+      "category": "festivals",
+      "price": "Free",
+      "url": "https://www.cccfm.org/orinda-market/",
+      "source": "cccfm.org",
+      "desc": "Year-round Saturday farmers market, 9am-1pm.",
+      "schedule": { "freq": "weekly", "day": 6, "time": "09:00" }
+    },
+    {
+      "title": "Concord Farmers Market at Todos Santos Plaza",
+      "venue": "Todos Santos Plaza",
+      "area": "Concord",
+      "category": "festivals",
+      "price": "Free",
+      "url": "https://www.pcfma.org/market/concord-farmers-market",
+      "source": "pcfma.org",
+      "desc": "Year-round Tuesday farmers market, 9am-2pm, on the plaza playground's doorstep.",
+      "schedule": { "freq": "weekly", "day": 2, "time": "09:00" }
+    },
+    {
+      "title": "Danville Farmers Market",
+      "venue": "Railroad Avenue, Danville",
+      "area": "Danville",
+      "category": "festivals",
+      "price": "Free",
+      "url": "https://www.pcfma.org/",
+      "source": "pcfma.org",
+      "desc": "Year-round Saturday farmers market at 205 Railroad Ave.",
+      "schedule": { "freq": "weekly", "day": 6, "time": "09:00" }
+    },
+    {
+      "title": "Martinez Farmers Market",
+      "venue": "Main Street, Downtown Martinez",
+      "area": "Martinez",
+      "category": "festivals",
+      "price": "Free",
+      "url": "https://www.pcfma.org/",
+      "source": "pcfma.org",
+      "desc": "Year-round Sunday farmers market at Main St & Estudillo St.",
+      "schedule": { "freq": "weekly", "day": 0, "time": "09:00" }
+    },
+    {
+      "title": "Pleasant Hill Farmers Market",
+      "venue": "Pleasant Hill City Hall",
+      "area": "Pleasant Hill",
+      "category": "festivals",
+      "price": "Free",
+      "url": "https://www.cccfm.org/",
+      "source": "cccfm.org",
+      "desc": "Seasonal Saturday farmers market at City Hall, 9am-1pm (May-November).",
+      "schedule": { "freq": "weekly", "day": 6, "time": "09:00", "months": [5, 6, 7, 8, 9, 10, 11] }
+    },
+    {
+      "title": "Moraga Farmers Market",
+      "venue": "Moraga Center",
+      "area": "Moraga",
+      "category": "festivals",
+      "price": "Free",
+      "url": "https://www.cafarmersmkts.com/moraga-farmers-market",
+      "source": "cafarmersmkts.com",
+      "desc": "Year-round Sunday farmers market, 9am-1pm.",
+      "schedule": { "freq": "weekly", "day": 0, "time": "09:00" }
+    },
+    {
+      "title": "Concord Music & Market",
+      "venue": "Todos Santos Plaza",
+      "area": "Concord",
+      "category": "music",
+      "price": "Free",
+      "url": "https://www.cityofconcord.org/311/Downtown-Events",
+      "source": "cityofconcord.org",
+      "desc": "Free Thursday-evening concerts on the plaza, 6:30-8pm (June-September), with the farmers market from 4pm. Bring a blanket — very kid-friendly.",
+      "schedule": { "freq": "weekly", "day": 4, "time": "18:30", "months": [6, 7, 8, 9] }
+    },
+    {
+      "title": "Pleasant Hill Off the Grid Food Trucks",
+      "venue": "Pleasant Hill City Hall Lawn",
+      "area": "Pleasant Hill",
+      "category": "festivals",
+      "price": "Free",
+      "url": "https://www.phillca.gov/888/Festivals-Events",
+      "source": "phillca.gov",
+      "desc": "Food trucks, live music and lawn games every Thursday 5-9pm (April-October). Free entry.",
+      "schedule": { "freq": "weekly", "day": 4, "time": "17:00", "months": [4, 5, 6, 7, 8, 9, 10] }
+    },
+    {
+      "title": "Moraga Summer Concerts at the Commons",
+      "venue": "Moraga Commons Park",
+      "area": "Moraga",
+      "category": "music",
+      "price": "Free",
+      "url": "https://moragaparks.org/summer-concert-series/",
+      "source": "moragaparks.org",
+      "desc": "Free Thursday-evening concerts at the Commons bandshell, 6:30-8:30pm (July-August), next to the playground and spray park.",
+      "schedule": { "freq": "weekly", "day": 4, "time": "18:30", "months": [7, 8] }
+    },
+    {
+      "title": "Orinda Summer Concerts in the Park",
+      "venue": "Orinda Community Center Park",
+      "area": "Orinda",
+      "category": "music",
+      "price": "Free",
+      "url": "https://www.cityoforinda.org/240/Find-Upcoming-Events",
+      "source": "cityoforinda.org",
+      "desc": "Free Thursday concerts in the park, 6-8pm (June-August).",
+      "schedule": { "freq": "weekly", "day": 4, "time": "18:00", "months": [6, 7, 8] }
+    },
+    {
+      "title": "San Ramon Summer Concerts at Central Park",
+      "venue": "Central Park Amphitheater, San Ramon",
+      "area": "San Ramon",
+      "category": "music",
+      "price": "Free",
+      "url": "https://sanramon.ca.gov/our_city/departments_and_divisions/parks_community_services/events/summer_concerts",
+      "source": "sanramon.ca.gov",
+      "desc": "Free Sunday-evening concerts at the Central Park amphitheater, 5:30pm (June-August), with food trucks.",
+      "schedule": { "freq": "weekly", "day": 0, "time": "17:30", "months": [6, 7, 8] }
+    },
+    {
+      "title": "Alamo Summer Concerts at Livorna Park",
+      "venue": "Livorna Park, Alamo",
+      "area": "Danville",
+      "category": "music",
+      "price": "Free",
+      "url": "https://www.contracosta.ca.gov/10396/Alamo-Parks",
+      "source": "contracosta.ca.gov",
+      "desc": "Free Friday-evening concerts at Livorna Park, 6:30-8:30pm (July), with food trucks.",
+      "schedule": { "freq": "weekly", "day": 5, "time": "18:30", "months": [7] }
+    }
+  ]
+}

@@ -12,7 +12,7 @@ const EVENTS_URL =
 const dedupeTitle = (title: string) =>
   title
     .toLowerCase()
-    .replace(/\b(the|a|an|presents|tour|live|vs|at|nyc|show|concert)\b/g, "")
+    .replace(/\b(the|a|an|and|presents|free|family|kids|at|with|event)\b/g, "")
     .replace(/[^a-z0-9]/g, "")
     .slice(0, 18);
 
@@ -107,8 +107,8 @@ export function useEvents() {
           id: x.id || `feed_${Math.random().toString(36).slice(2, 9)}`,
           title: x.title || "Untitled Event",
           artist: x.artist || "",
-          venue: x.venue || "NYC Venue",
-          area: x.area || "New York",
+          venue: x.venue || "East Bay Venue",
+          area: x.area || "Contra Costa",
           cat: x.cat || "other",
           price: x.price || "Check site",
           start: rollStartForward(x.start),
@@ -150,8 +150,8 @@ export function useEvents() {
         id: `manual_${Math.random().toString(36).substring(2, 9)}`,
         title: data.title.trim(),
         artist: data.artist.trim(),
-        venue: data.venue.trim() || "NYC Venue",
-        area: SEED_VENUE_AREAS[data.venue.trim()] || "New York",
+        venue: data.venue.trim() || "East Bay Venue",
+        area: SEED_VENUE_AREAS[data.venue.trim()] || "Contra Costa",
         cat: data.cat,
         price: data.price.trim() || "Check site",
         start: `${data.date}T${data.time || "19:00"}:00Z`,

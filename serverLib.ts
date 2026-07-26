@@ -33,35 +33,35 @@ export async function fetchWithRetry(url: string, options: any = {}, retries = 2
 // Shared fallback shown when no price could be determined.
 export const PRICE_FALLBACK = "Check site";
 
-// Best-effort categorization. Venue is the strongest signal for curated
-// single-genre venues, so it's checked first; then keyword rules run from the
-// most specific category to the most general.
+// Best-effort categorization for a kids/family calendar. Keyword rules run
+// first (most specific category to most general), then the venue provides a
+// fallback for reliably single-genre venues (libraries, craft stores, farms).
 export function categorizeEvent(title: string, description: string, venue = ""): string {
   const hay = `${title || ""} ${description || ""}`.toLowerCase();
   const v = (venue || "").toLowerCase();
 
-  // Venue rules first (strongest signal for reliably single-genre venues).
-  if (/(carnegie hall|metropolitan opera|met opera|alice tully|david geffen hall|nyphil|new york philharmonic|zankel hall|stern auditorium)/.test(v)) return "classical";
-  if (/(joyce theater|new york city ballet|alvin ailey|\bballet\b)/.test(v)) return "dance";
-  if (/(blue note|bowery ballroom|brooklyn steel)/.test(v)) return "concerts";
-  if (/(public theater|playbill|broadway)/.test(v)) return "broadway";
-  if (/(\bmoma\b|\bmuseum\b|\bgallery\b|guggenheim|whitney)/.test(v)) return "arts";
-  if (/\blibrary\b/.test(v)) return "talks";
+  if (/(story ?time|storytelling|story hour|read to a (dog|therapy)|lap ?sit|baby time|toddler time|rhyme time|bilingual stories|book (club|buddies)|picture book)/.test(hay)) return "storytime";
+  if (/(festival|\bfair\b|carnival|parade|celebration|egg hunt|trick.or.treat|tree lighting|oktoberfest|farmers.? market|holiday market|block party|touch.a.truck)/.test(hay)) return "festivals";
+  if (/(\bcraft\b|crafts|\blego\b|maker|make ?break|build.*workshop|kids.? workshop|art (class|lab|studio)|painting|slime|\bstem\b|science (lab|saturday)|tinker|scouts? build|diy)/.test(hay)) return "crafts";
+  if (/(wildlife|\banimals?\b|\bfarm\b|nature|hike|ranger|garden|\bzoo\b|creek|\bbugs?\b|\bbirds?\b|pony|petting|raptor|tide ?pool|junior naturalist)/.test(hay)) return "nature";
+  if (/(puppet|magic show|magician|\bmovie\b|\bfilm\b|cinema|\bcircus\b|\bballet\b|nutcracker|theatre|theater|musical|\bplay\b|dance performance)/.test(hay)) return "shows";
+  if (/(concert|music in the park|live music|\bband\b|sing.?along|kindermusik|music (class|together)|summer concert|symphony|orchestra|\bjazz\b|\bmusic\b)/.test(hay)) return "music";
+  if (/(open gym|play ?time|open play|bounce|skate|swim|splash|soccer|basketball|gymnastics|t-ball|tumbling|bike (rodeo|ride)|scavenger hunt|obstacle|sports)/.test(hay)) return "play";
 
-  // Fitness / wellness -> other (prevents these from grabbing dance/other buckets).
-  if (/(\byoga\b|pilates|zumba|workout|\bfitness\b|bootcamp|meditation|wellness)/.test(hay)) return "other";
-
-  // Keyword rules, most specific -> most general.
-  if (/(\bvs\.?\b|yankees|mets|knicks|nets|rangers|liberty|\bgame\b|stadium|playoff|nba|nfl|nhl|mlb)/.test(hay)) return "sports";
-  if (/(philharmonic|opera|symphony|orchestra|chamber|recital|classical|quartet|sonata|concerto)/.test(hay)) return "classical";
-  // Dance: avoid bare "dance" so band names ("Dance Gavin Dance") / "dance party" don't misfire.
-  if (/(\bballet\b|choreograph|nutcracker|danceafrica|\bballroom\b|(modern|contemporary|tap|swing|salsa|tango|flamenco)\s+danc|danc\w*\s+(company|theat(?:er|re)|performance|troupe)|tap\s+(?:city|festival))/.test(hay)) return "dance";
-  // Talks: require an explicit talk/reading signal, not a bare "talk" appearing in prose.
-  if (/(\blecture\b|artist talk|author talk|talkback|in conversation|panel discussion|podcast|symposium|q&a|live taping|radiolab|radio hour|book launch|reading series|poetry reading|\bauthors?\b)/.test(hay)) return "talks";
-  if (/(exhibit|exhibition|\bgallery\b|\bmuseum\b|installation|retrospective|sculpture|painting|photography)/.test(hay)) return "arts";
-  if (/(broadway|theater|theatre|\bplay\b|musical|comedy|drama|cabaret|improv|stand.?up)/.test(hay)) return "broadway";
-  if (/(concert|\bmusic\b|jazz|festival|\bband\b|\blive\b|\bdj\b|rock|hip.?hop|\bset\b)/.test(hay)) return "concerts";
+  // Venue fallback (strong signal when the title alone is generic).
+  if (/(lindsay wildlife|regional park|ebparks|borges ranch|forest home farms|\branch\b|\bfarm\b)/.test(v)) return "nature";
+  if (/(lowe'?s|home depot|lakeshore|michaels)/.test(v)) return "crafts";
+  if (/\blibrary\b/.test(v)) return "storytime";
+  if (/(lesher|village theatre|theatre|theater|amphitheat)/.test(v)) return "shows";
   return "other";
+}
+
+// Events that clearly aren't for young kids: adults-only signals, nightlife,
+// and alcohol-centric outings. Used to filter generic providers (Ticketmaster
+// Family classification is pre-filtered, but scrapes and search results aren't).
+export function isKidAppropriate(title: string, description = ""): boolean {
+  const hay = `${title || ""} ${description || ""}`.toLowerCase();
+  return !/(21\s*\+|18\s*\+|adults?[- ]only|ages? 21|wine (tasting|walk|stroll)|beer (crawl|fest|garden)|brewery tour|cocktail|mixology|bar crawl|happy hour|singles|speed dating|burlesque|drag brunch|casino|cannabis|gala dinner|networking mixer)/.test(hay);
 }
 
 // Deterministically parse schema.org / JSON-LD Event markup from a page (no API key needed).
@@ -102,7 +102,7 @@ export function extractJsonLdEvents(html: string, sourceUrl: string): any[] {
       }
     }
 
-    let venue = "NYC Venue";
+    let venue = "East Bay Venue";
     if (typeof node.location === "string") venue = node.location;
     else if (node.location?.name) venue = node.location.name;
     else if (node.location?.address?.addressLocality) venue = node.location.address.addressLocality;
@@ -173,14 +173,15 @@ export function extractJsonLdEvents(html: string, sourceUrl: string): any[] {
 export const EVENT_JSON_SCHEMA_HINT = `Each event in the array MUST strictly follow this JSON schema:
 {
   "title": "Clean event title",
-  "artist": "Leading artist or sports team name",
-  "venue": "Venue name in NYC or nearby",
-  "category": "One of: classical, broadway, concerts, sports, arts, dance, talks, other",
+  "artist": "Performer, host, or presenting organization (may be empty)",
+  "venue": "Venue name (in or near Central Contra Costa County, CA)",
+  "area": "City, e.g. Walnut Creek, Concord, Pleasant Hill, Danville, Lafayette, Moraga, Orinda, San Ramon, Martinez, Clayton",
+  "category": "One of: storytime, crafts, music, shows, nature, play, festivals, other",
   "date": "YYYY-MM-DD",
-  "time": "HH:MM 24h format, e.g. 19:30",
-  "price": "e.g. Free, $45+ or $60-$120",
-  "ticketUrl": "The direct page to buy/learn about this event",
-  "description": "Short 1-2 sentence description of the event"
+  "time": "HH:MM 24h format, e.g. 10:30",
+  "price": "e.g. Free, $10+ or $10-$25",
+  "ticketUrl": "The direct page to register/learn about this event",
+  "description": "Short 1-2 sentence description of the event, mentioning target ages if stated"
 }
 Ensure all keys are valid JSON. Do not return backticks or markdown; start with [ and end with ].`;
 
@@ -198,8 +199,10 @@ export async function geminiExtractEventsFromUrl(
     ? `We fetched the webpage content for the event page: ${url}. The plain-text content is below:\n---\n${webpageText}\n---\nAnalyze this content and extract the event(s) scheduled. If the text looks incomplete, ALSO use Google Search to find current listings for this page.`
     : `We could not read the webpage directly (it may be JS-rendered or blocking scrapers). Use Google Search to look up the current event listings for the page "${url}" (and the organization/venue it represents) and extract its upcoming events.`;
   const prompt = `${lead}
+This feed powers a family events calendar for parents of young children (ages 0-7) in Central Contra Costa County, California: Walnut Creek, Concord, Pleasant Hill, Danville, Alamo, Lafayette, Moraga, Orinda, San Ramon, Martinez, and Clayton.
+ONLY return events that are (a) designed for kids/families (storytimes, crafts, kids' workshops, puppet shows, nature programs), or (b) family-friendly community events a parent would happily bring young kids to (music in the park, festivals, farmers markets, movie nights). EXCLUDE adults-only events (21+, nightlife, wine/beer events, adult classes) and events located outside those cities.
 Today's date is ${today}. ONLY return events scheduled on or after today, and use the correct full calendar year (this year or next) — never default to a past year. Discard anything already past.
-Return a JSON array of parsed events (up to 20 for listings pages, 1 for a single event). Set ticketUrl to the most specific ticket/info page you can find, otherwise "${url}".
+Return a JSON array of parsed events (up to 20 for listings pages, 1 for a single event). Set ticketUrl to the most specific registration/info page you can find, otherwise "${url}".
 ${EVENT_JSON_SCHEMA_HINT}`;
 
   let response;

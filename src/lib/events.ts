@@ -34,7 +34,7 @@ export function hostOf(url: string): string {
 
 // ---------- Source label formatting ----------
 const SOURCE_ACRONYMS: Record<string, string> = {
-  wnyc: "WNYC", moma: "MoMA", bam: "BAM", nyc: "NYC", pbs: "PBS", npr: "NPR", serpapi: "SerpApi",
+  ccclib: "CCC Library", ebparks: "East Bay Parks", serpapi: "SerpApi", ca: "CA",
 };
 
 function titleCaseWord(w: string): string {
@@ -65,7 +65,8 @@ export type ProviderTone = "official" | "web" | "manual";
 export function providerMeta(ev: EventItem): { label: string; tone: ProviderTone } {
   switch (ev.provider) {
     case "Ticketmaster":
-    case "NYC Open Data":
+    case "City Feed":
+    case "Recurring":
       return { label: "Official", tone: "official" };
     case "Manual":
       return { label: "Added by you", tone: "manual" };
@@ -76,15 +77,21 @@ export function providerMeta(ev: EventItem): { label: string; tone: ProviderTone
   }
 }
 
-// ---------- Borough / date helpers ----------
-// Map an event's area/venue text to one of the five boroughs (best-effort).
-export function getBorough(area: string, venue: string): string {
+// ---------- City / date helpers ----------
+// Map an event's area/venue text to one of the covered cities (best-effort).
+// Alamo counts as Danville; landmark venues resolve to their home city.
+export function getCity(area: string, venue: string): string {
   const hay = `${area || ""} ${venue || ""}`.toLowerCase();
-  if (/staten/.test(hay)) return "Staten Island";
-  if (/(bronx|yankee)/.test(hay)) return "Bronx";
-  if (/(brooklyn|williamsburg|bushwick|dumbo|barclays|\bbam\b|prospect|greenpoint|coney)/.test(hay)) return "Brooklyn";
-  if (/(queens|astoria|flushing|citi field|forest hills|long island city|\blic\b)/.test(hay)) return "Queens";
-  if (/(manhattan|midtown|upper west|upper east|harlem|village|soho|tribeca|chelsea|lincoln center|carnegie|madison square|radio city|times square|downtown)/.test(hay)) return "Manhattan";
+  if (/(walnut creek|lesher|lindsay wildlife|broadway plaza|civic park|heather farm|bedford gallery|borges ranch|shadelands|larkey|boundary oak)/.test(hay)) return "Walnut Creek";
+  if (/(concord|todos santos|veranda|pixieland|sunvalley|hurricane harbor|markham)/.test(hay)) return "Concord";
+  if (/(pleasant hill|diablo valley college|\bdvc\b)/.test(hay)) return "Pleasant Hill";
+  if (/(danville|alamo|blackhawk|san ramon valley museum|village theatre)/.test(hay)) return "Danville";
+  if (/lafayette/.test(hay)) return "Lafayette";
+  if (/(moraga|saint mary's college|moraga commons)/.test(hay)) return "Moraga";
+  if (/orinda/.test(hay)) return "Orinda";
+  if (/(san ramon|bishop ranch|dougherty|forest home farms)/.test(hay)) return "San Ramon";
+  if (/martinez/.test(hay)) return "Martinez";
+  if (/clayton/.test(hay)) return "Clayton";
   return "Other";
 }
 
@@ -132,12 +139,13 @@ export function formatPriceDisplay(price: string): string {
 // ---------- Category helpers ----------
 export function getEventImage(item: EventItem): string {
   if (item.image) return item.image;
-  if (item.cat === "classical") return "linear-gradient(135deg, #a18cd1 0%, #fbc2eb 100%)";
-  if (item.cat === "broadway") return "linear-gradient(135deg, #11998e 0%, #38ef7d 100%)";
-  if (item.cat === "sports") return "linear-gradient(135deg, #ff9966 0%, #ff5e62 100%)";
-  if (item.cat === "arts") return "linear-gradient(135deg, #c471f5 0%, #fa71cd 100%)";
-  if (item.cat === "dance") return "linear-gradient(135deg, #f093fb 0%, #f5576c 100%)";
-  if (item.cat === "talks") return "linear-gradient(135deg, #4facfe 0%, #00f2fe 100%)";
+  if (item.cat === "storytime") return "linear-gradient(135deg, #a18cd1 0%, #fbc2eb 100%)";
+  if (item.cat === "crafts") return "linear-gradient(135deg, #c471f5 0%, #fa71cd 100%)";
+  if (item.cat === "music") return "linear-gradient(135deg, #4facfe 0%, #00f2fe 100%)";
+  if (item.cat === "shows") return "linear-gradient(135deg, #11998e 0%, #38ef7d 100%)";
+  if (item.cat === "nature") return "linear-gradient(135deg, #96e6a1 0%, #d4fc79 100%)";
+  if (item.cat === "play") return "linear-gradient(135deg, #ff9966 0%, #ff5e62 100%)";
+  if (item.cat === "festivals") return "linear-gradient(135deg, #f093fb 0%, #f5576c 100%)";
   return "linear-gradient(135deg, #2193b0 0%, #6dd5ed 100%)";
 }
 
@@ -167,18 +175,6 @@ export function resolveTicketTarget(ev: EventItem): { url: string; label: string
     return { url, label: `Opens ${new URL(url).hostname.replace(/^www\./, "")}` };
   }
 
-  const lowerVenue = ev.venue.toLowerCase();
-  const isArena =
-    lowerVenue.includes("madison square garden") ||
-    lowerVenue.includes("barclays center") ||
-    lowerVenue.includes("radio city music hall") ||
-    lowerVenue.includes("brooklyn steel");
-
-  if (isArena && (ev.cat === "concerts" || ev.cat === "sports")) {
-    const query = encodeURIComponent(`${ev.artist || ev.title} ${ev.venue}`);
-    return { url: `https://www.ticketmaster.com/search?q=${query}`, label: "Search Ticketmaster" };
-  }
-
   const dateObj = new Date(ev.start);
   const dateLabel = dateObj.toLocaleDateString("en-US", { month: "long", year: "numeric" });
   const fallbackQuery = encodeURIComponent(`${ev.title} ${ev.venue} tickets ${dateLabel}`);
@@ -187,10 +183,10 @@ export function resolveTicketTarget(ev: EventItem): { url: string; label: string
 
 // ---------- Calendar / ICS exports ----------
 export async function shareEvent(ev: EventItem): Promise<void> {
-  const textLabel = `Orch: ${ev.title} at ${ev.venue} (${ev.price})`;
+  const textLabel = `Sprout Scout: ${ev.title} at ${ev.venue} (${ev.price})`;
   if (navigator.share) {
     try {
-      await navigator.share({ title: "Orch", text: textLabel, url: ev.ticketUrl });
+      await navigator.share({ title: "Sprout Scout", text: textLabel, url: ev.ticketUrl });
     } catch (_) {
       // user cancelled / share unavailable
     }
@@ -204,7 +200,7 @@ export function googleCalendarUrl(ev: EventItem): string {
   const startStr = new Date(ev.start).toISOString().replace(/-|:|\.\d\d\d/g, "");
   const endDateObj = new Date(new Date(ev.start).getTime() + 2.5 * 60 * 60 * 1000);
   const endStr = endDateObj.toISOString().replace(/-|:|\.\d\d\d/g, "");
-  const details = `${ev.desc || "NYC Live Event"} \n\nDirect tickets: ${ev.ticketUrl}`;
+  const details = `${ev.desc || "Family event in the East Bay"} \n\nDetails: ${ev.ticketUrl}`;
   return `https://calendar.google.com/calendar/render?action=TEMPLATE&text=${encodeURIComponent(ev.title)}&dates=${startStr}/${endStr}&details=${encodeURIComponent(details)}&location=${encodeURIComponent(ev.venue + ", " + ev.area)}`;
 }
 
@@ -217,11 +213,11 @@ function vevent(ev: EventItem): string {
   const end = new Date(start.getTime() + 2.5 * 60 * 60 * 1000);
   return [
     "BEGIN:VEVENT",
-    `UID:${ev.id}@orch.live`,
+    `UID:${ev.id}@sproutscout.app`,
     `DTSTART:${icsTime(start)}`,
     `DTEND:${icsTime(end)}`,
     `SUMMARY:${ev.title.replace(/\n/g, " ")}`,
-    `DESCRIPTION:${(ev.desc || "Live NYC event").replace(/\n/g, "\\n")} \\n\\nTickets: ${ev.ticketUrl}`,
+    `DESCRIPTION:${(ev.desc || "Family event in the East Bay").replace(/\n/g, "\\n")} \\n\\nDetails: ${ev.ticketUrl}`,
     `LOCATION:${ev.venue}, ${ev.area}`,
     "BEGIN:VALARM",
     "TRIGGER:-PT1H",
@@ -243,14 +239,14 @@ function triggerDownload(filename: string, content: string) {
 }
 
 export function downloadICS(ev: EventItem): void {
-  const ics = ["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//Orch//EN", vevent(ev), "END:VCALENDAR"].join("\r\n");
+  const ics = ["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//SproutScout//EN", vevent(ev), "END:VCALENDAR"].join("\r\n");
   triggerDownload(`${ev.title.toLowerCase().replace(/[^a-z0-9]/g, "_")}.ics`, ics);
 }
 
 // Returns the number of events exported (0 means nothing to export).
 export function downloadMultiICS(list: EventItem[], filename: string): number {
   if (list.length === 0) return 0;
-  const ics = ["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//Orch//EN", ...list.map(vevent), "END:VCALENDAR"].join("\r\n");
+  const ics = ["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//SproutScout//EN", ...list.map(vevent), "END:VCALENDAR"].join("\r\n");
   triggerDownload(filename, ics);
   return list.length;
 }
