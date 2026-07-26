@@ -4,13 +4,15 @@ name: Scheduled event ingest
 # The app fetches that file directly (no database).
 #
 # Optional repository secrets (Settings -> Secrets and variables -> Actions):
-#   TICKETMASTER_KEY  enables the Ticketmaster feed
+#   TICKETMASTER_KEY  enables the Ticketmaster Family-events feed
 #   GEMINI_API_KEY    enables AI extraction for pages without structured data
-# With neither set, the scraper still imports any sites that expose schema.org data.
+#   SERPAPI_KEY       enables Google Events results (free tier ~100/month)
+# With none set, the scraper still emits the curated recurring schedules, the
+# city iCal feeds, and any sites that expose schema.org data.
 
 on:
   schedule:
-    - cron: "0 */4 * * *" # 6x daily, every 4 hours (00,04,08,12,16,20 UTC)
+    - cron: "0 1,13 * * *" # 2x daily at 6pm & 6am Pacific (01:00, 13:00 UTC)
   workflow_dispatch: {} # allow manual "Run workflow" from the Actions tab
 
 permissions:
@@ -43,7 +45,6 @@ jobs:
           TICKETMASTER_KEY: ${{ secrets.TICKETMASTER_KEY }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           SERPAPI_KEY: ${{ secrets.SERPAPI_KEY }}
-          SOCRATA_APP_TOKEN: ${{ secrets.SOCRATA_APP_TOKEN }}
         run: npx tsx scripts/ingest.ts
 
       - name: Publish events.json to data branch

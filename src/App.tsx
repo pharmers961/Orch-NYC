@@ -64,10 +64,10 @@ export default function App() {
     if (filters.dateFilter !== "all") params.set("when", filters.dateFilter);
     if (filters.savedOnly) params.set("saved", "1");
     if (filters.searchQuery.trim()) params.set("q", filters.searchQuery.trim());
-    if (filters.selectedBoroughs.length) params.set("boroughs", filters.selectedBoroughs.join(","));
+    if (filters.selectedCities.length) params.set("cities", filters.selectedCities.join(","));
     const qs = params.toString();
     window.history.replaceState(null, "", qs ? `?${qs}` : window.location.pathname);
-  }, [viewMode, filters.sortBy, filters.dateFilter, filters.savedOnly, filters.searchQuery, filters.selectedBoroughs]);
+  }, [viewMode, filters.sortBy, filters.dateFilter, filters.savedOnly, filters.searchQuery, filters.selectedCities]);
 
   // Read view state from the URL once on mount.
   useEffect(() => {
@@ -81,8 +81,8 @@ export default function App() {
     if (params.get("saved") === "1") filters.setSavedOnly(true);
     const q = params.get("q");
     if (q) filters.setSearchQuery(q);
-    const b = params.get("boroughs");
-    if (b) filters.setSelectedBoroughs(b.split(",").filter(Boolean));
+    const b = params.get("cities");
+    if (b) filters.setSelectedCities(b.split(",").filter(Boolean));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -133,7 +133,7 @@ export default function App() {
           savedOnly={filters.savedOnly} setSavedOnly={filters.setSavedOnly} savedCount={savedIds.length}
           searchQuery={filters.searchQuery} setSearchQuery={filters.setSearchQuery}
           sortBy={filters.sortBy} setSortBy={filters.setSortBy}
-          onBulkExport={() => handleBulkExport(filters.filteredEventsList, "orch-nyc-events.ics")}
+          onBulkExport={() => handleBulkExport(filters.filteredEventsList, "sprout-scout-events.ics")}
           viewMode={viewMode} setViewMode={setViewMode}
         />
 
@@ -145,8 +145,8 @@ export default function App() {
           onCloseSidebar={() => setSidebarOpen(false)}
           selectedCategories={filters.selectedCategories}
           onToggleCategory={onToggleCategory}
-          selectedBoroughs={filters.selectedBoroughs}
-          setSelectedBoroughs={filters.setSelectedBoroughs}
+          selectedCities={filters.selectedCities}
+          setSelectedCities={filters.setSelectedCities}
           freeOnly={filters.freeOnly}
           setFreeOnly={filters.setFreeOnly}
           maxPrice={filters.maxPrice}
@@ -174,7 +174,7 @@ export default function App() {
               <Sparkles size={32} className="text-indigo-500 mx-auto mb-4" />
               <h3 className="font-bold text-lg text-slate-800 dark:text-zinc-200">No events loaded yet</h3>
               <p className="text-sm text-slate-500 dark:text-zinc-400 mt-2 max-w-md mx-auto">
-                Events load automatically from the NYC feed, which refreshes a few times a day. If nothing appears, the feed may still be updating — check back shortly, or add your own event.
+                Events load automatically from the East Bay kids feed, which refreshes a few times a day. If nothing appears, the feed may still be updating — check back shortly, or add your own event.
               </p>
               <div className="mt-6 flex flex-wrap justify-center gap-3">
                 <button onClick={() => setAddEventOpen(true)} className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold rounded-full">
@@ -243,7 +243,7 @@ export default function App() {
               customVenueColors={customVenueColors}
               onSelectEvent={(id) => setSelectedEventId(id)}
               onToggleSave={toggleSave}
-              onExport={() => handleBulkExport(savedEvents, "orch-my-plan.ics")}
+              onExport={() => handleBulkExport(savedEvents, "sprout-scout-plan.ics")}
             />
           )}
         </main>

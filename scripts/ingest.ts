@@ -4,50 +4,65 @@
  * normalizes + de-dupes -> writes events.json. The workflow then publishes
  * that file to the `data` branch, and the app fetches it.
  *
- * Env: TICKETMASTER_KEY (optional), GEMINI_API_KEY (optional).
+ * Sources, in order of reliability:
+ *   1. recurring-sources.json — curated fixed schedules (store kids' workshops,
+ *      farmers markets, summer concert series). Always present, no network.
+ *   2. ical-sources.json — city/venue iCal feeds (structured, no AI).
+ *   3. Ticketmaster Discovery API (Family classification near Walnut Creek).
+ *   4. sources.json — web pages: JSON-LD first, Playwright render, Gemini last.
+ *   5. SerpApi Google Events (optional).
+ *
+ * Env: TICKETMASTER_KEY (optional), GEMINI_API_KEY (optional), SERPAPI_KEY (optional).
  */
 import { writeFileSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
-import { fetchWithRetry, extractJsonLdEvents, geminiExtractEventsFromUrl, categorizeEvent, PRICE_FALLBACK } from "../serverLib";
+import { fetchWithRetry, extractJsonLdEvents, geminiExtractEventsFromUrl, categorizeEvent, isKidAppropriate, PRICE_FALLBACK } from "../serverLib";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, "..");
 const OUT_FILE = path.join(ROOT, "events.json");
 
-function readSources(): string[] {
+function readJsonConfig(file: string, key: string): any[] {
   try {
-    const raw = readFileSync(path.join(ROOT, "sources.json"), "utf8");
+    const raw = readFileSync(path.join(ROOT, file), "utf8");
     const parsed = JSON.parse(raw);
-    const list = Array.isArray(parsed) ? parsed : parsed.sources;
-    return Array.isArray(list) ? [...new Set(list.filter((s) => typeof s === "string"))] : [];
+    const list = Array.isArray(parsed) ? parsed : parsed[key];
+    return Array.isArray(list) ? list : [];
   } catch {
     return [];
   }
 }
 
-interface SocrataCfg {
-  id: string;            // Socrata dataset id, e.g. "fudw-fgrp"
+function readSources(): string[] {
+  return [...new Set(readJsonConfig("sources.json", "sources").filter((s) => typeof s === "string"))];
+}
+
+interface IcalCfg {
+  url: string;           // .ics feed URL
   source?: string;       // label shown in the Sources filter
-  dateField?: string;
-  titleField?: string;
-  venueField?: string;
-  descField?: string;
-  urlField?: string;
+  venue?: string;        // fallback venue when the feed has no LOCATION
+  area?: string;         // city, e.g. "Danville"
+  category?: string;     // fallback category
+  price?: string;
+}
+
+interface RecurringCfg {
+  title: string;
+  venue: string;
+  area: string;
   category?: string;
   price?: string;
-  limit?: number;
-}
-
-function readSocrataSources(): SocrataCfg[] {
-  try {
-    const raw = readFileSync(path.join(ROOT, "socrata-sources.json"), "utf8");
-    const parsed = JSON.parse(raw);
-    const list = Array.isArray(parsed) ? parsed : parsed.datasets;
-    return Array.isArray(list) ? list.filter((d: any) => d && typeof d.id === "string") : [];
-  } catch {
-    return [];
-  }
+  url: string;
+  source?: string;
+  desc?: string;
+  schedule: {
+    freq: "weekly" | "monthly";
+    day: number;         // 0=Sunday .. 6=Saturday
+    time: string;        // "HH:MM" Pacific wall time
+    ordinals?: number[]; // for monthly: which <day> of the month (1=first, 3=third)
+    months?: number[];   // restrict to these months (1-12), e.g. summer series
+  };
 }
 
 // The previous feed (downloaded by the workflow into prev-events.json) so the
@@ -101,27 +116,27 @@ function rollForwardIfPast(dateStr: string): string {
 function dedupeKey(title: string, dateStr: string): string {
   const normTitle = (title || "")
     .toLowerCase()
-    .replace(/\b(the|a|an|presents|tour|live|vs|at|nyc|show|concert)\b/g, "")
+    .replace(/\b(the|a|an|and|presents|free|family|kids|at|with|event)\b/g, "")
     .replace(/[^a-z0-9]/g, "")
     .slice(0, 24);
   const key = `${normTitle}_${dateStr}`.replace(/[^a-z0-9_-]/g, "");
   return key || `evt_${Math.random().toString(36).slice(2, 10)}`;
 }
 
-const VALID_CATS = ["concerts", "broadway", "classical", "sports", "arts", "dance", "talks", "other"];
+const VALID_CATS = ["storytime", "crafts", "music", "shows", "nature", "play", "festivals", "other"];
 
 function normalizeEvent(raw: any, sourceUrl: string, provider: string, sourceHost?: string) {
   const cat = VALID_CATS.includes((raw.category || "").toLowerCase()) ? raw.category.toLowerCase() : "other";
   const dateStr = rollForwardIfPast(cleanDate(raw.date));
-  const start = `${dateStr}T${raw.time || "19:00"}:00Z`;
+  const start = `${dateStr}T${raw.time || "10:00"}:00Z`;
   const startTs = new Date(start).getTime();
   const title = (raw.title || "Untitled Event").toString().trim();
   return {
     id: dedupeKey(title, dateStr),
     title,
     artist: raw.artist || "",
-    venue: raw.venue || "NYC Venue",
-    area: raw.area || "New York",
+    venue: raw.venue || "East Bay Venue",
+    area: raw.area || "Contra Costa",
     cat,
     price: raw.price || PRICE_FALLBACK,
     start,
@@ -136,15 +151,152 @@ function normalizeEvent(raw: any, sourceUrl: string, provider: string, sourceHos
   };
 }
 
+// ---- Pacific-time helpers ------------------------------------------------
+// Convert an America/Los_Angeles wall time to the corresponding UTC instant
+// (handles DST via Intl, two-pass fixed-point).
+function laWallToUtc(y: number, mo: number, d: number, hh: number, mm: number): Date {
+  const target = Date.UTC(y, mo - 1, d, hh, mm);
+  let guess = target;
+  for (let i = 0; i < 3; i++) {
+    const dtf = new Intl.DateTimeFormat("en-US", {
+      timeZone: "America/Los_Angeles",
+      year: "numeric", month: "2-digit", day: "2-digit",
+      hour: "2-digit", minute: "2-digit", hourCycle: "h23",
+    });
+    const parts: Record<string, string> = {};
+    dtf.formatToParts(new Date(guess)).forEach((p) => (parts[p.type] = p.value));
+    const seen = Date.UTC(+parts.year, +parts.month - 1, +parts.day, +parts.hour, +parts.minute);
+    const diff = target - seen;
+    if (diff === 0) break;
+    guess += diff;
+  }
+  return new Date(guess);
+}
+
+// ---- Recurring curated schedules ----------------------------------------
+// Expands fixed weekly/monthly schedules (store kids' workshops, farmers
+// markets, concert series) into concrete events for the next ~7 weeks.
+function expandRecurring(cfg: RecurringCfg, horizonDays = 49): any[] {
+  const out: any[] = [];
+  const s = cfg.schedule;
+  if (!s || typeof s.day !== "number" || !s.time) return out;
+  const [hh, mm] = s.time.split(":").map((n) => parseInt(n, 10));
+  // Step at UTC noon: LA is 7-8h behind UTC, so the UTC calendar date at noon
+  // matches the LA calendar date — weekday math stays correct.
+  const start = new Date();
+  start.setUTCHours(12, 0, 0, 0);
+  for (let i = 0; i <= horizonDays; i++) {
+    const d = new Date(start.getTime() + i * 86400000);
+    if (d.getUTCDay() !== s.day) continue;
+    const month = d.getUTCMonth() + 1;
+    if (s.months && !s.months.includes(month)) continue;
+    if (s.freq === "monthly") {
+      const ordinal = Math.floor((d.getUTCDate() - 1) / 7) + 1;
+      if (!(s.ordinals || [1]).includes(ordinal)) continue;
+    }
+    const iso = laWallToUtc(d.getUTCFullYear(), month, d.getUTCDate(), hh, mm).toISOString();
+    out.push({
+      title: cfg.title,
+      artist: "",
+      venue: cfg.venue,
+      area: cfg.area,
+      category: cfg.category || categorizeEvent(cfg.title, cfg.desc || "", cfg.venue),
+      date: iso.split("T")[0],
+      time: iso.slice(11, 16),
+      price: cfg.price || "Free",
+      ticketUrl: cfg.url,
+      description: cfg.desc || "",
+    });
+  }
+  return out;
+}
+
+// ---- iCal feeds ----------------------------------------------------------
+// Minimal ICS parser: unfold lines, walk VEVENT blocks, read the fields we
+// use. City calendars mix in meetings/senior programming, so events run
+// through a civic-noise blocklist plus the shared kid-appropriateness check.
+const CIVIC_NOISE = /(city council|town council|planning commission|committee|commission meeting|board meeting|closed session|study session|task force|public hearing|budget|senior (center|bingo|lunch|social|trip)|blood drive|job fair|adults? \(?(18|21)|ballot|election)/i;
+
+function parseIcsDateValue(value: string): { date: string; time: string } | null {
+  let m = /^(\d{4})(\d{2})(\d{2})$/.exec(value);
+  if (m) return { date: `${m[1]}-${m[2]}-${m[3]}`, time: "10:00" }; // all-day
+  m = /^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})?(Z)?$/.exec(value);
+  if (!m) return null;
+  const iso = m[7]
+    ? new Date(Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +(m[6] || "0"))).toISOString()
+    : laWallToUtc(+m[1], +m[2], +m[3], +m[4], +m[5]).toISOString(); // floating/TZID -> Pacific
+  return { date: iso.split("T")[0], time: iso.slice(11, 16) };
+}
+
+export function parseIcs(text: string): { summary: string; dtstart: string; description: string; location: string; url: string }[] {
+  const lines = text.replace(/\r\n[ \t]/g, "").replace(/\n[ \t]/g, "").split(/\r?\n/);
+  const events: any[] = [];
+  let cur: any = null;
+  for (const line of lines) {
+    if (line === "BEGIN:VEVENT") { cur = { summary: "", dtstart: "", description: "", location: "", url: "" }; continue; }
+    if (line === "END:VEVENT") { if (cur) events.push(cur); cur = null; continue; }
+    if (!cur) continue;
+    const idx = line.indexOf(":");
+    if (idx < 0) continue;
+    const [nameAndParams, value] = [line.slice(0, idx), line.slice(idx + 1)];
+    const name = nameAndParams.split(";")[0].toUpperCase();
+    const unescape = (v: string) => v.replace(/\\n/g, " ").replace(/\\,/g, ",").replace(/\\;/g, ";").trim();
+    if (name === "SUMMARY") cur.summary = unescape(value);
+    else if (name === "DTSTART") cur.dtstart = value.trim();
+    else if (name === "DESCRIPTION") cur.description = unescape(value).replace(/<[^>]+>/g, "").slice(0, 400);
+    else if (name === "LOCATION") cur.location = unescape(value);
+    else if (name === "URL") cur.url = value.trim();
+  }
+  return events;
+}
+
+async function fetchIcal(cfg: IcalCfg): Promise<any[]> {
+  const res = await fetchWithRetry(cfg.url, {
+    headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0 Safari/537.36" },
+  });
+  if (!res.ok) throw new Error(`iCal HTTP ${res.status}`);
+  const text = await res.text();
+  if (!/BEGIN:VCALENDAR/i.test(text)) throw new Error("not an ICS feed");
+  const today = new Date();
+  today.setUTCHours(0, 0, 0, 0);
+  const maxTs = today.getTime() + 120 * 86400000;
+  const out: any[] = [];
+  for (const ev of parseIcs(text)) {
+    if (!ev.summary || !ev.dtstart) continue;
+    const dt = parseIcsDateValue(ev.dtstart);
+    if (!dt) continue;
+    const ts = new Date(`${dt.date}T${dt.time}:00Z`).getTime();
+    if (isNaN(ts) || ts < today.getTime() || ts > maxTs) continue;
+    if (CIVIC_NOISE.test(`${ev.summary} ${ev.description}`)) continue;
+    if (!isKidAppropriate(ev.summary, ev.description)) continue;
+    const venue = ev.location || cfg.venue || "East Bay Venue";
+    const guessedCat = categorizeEvent(ev.summary, ev.description, venue);
+    out.push({
+      title: ev.summary,
+      artist: "",
+      venue,
+      area: cfg.area || "",
+      category: guessedCat !== "other" ? guessedCat : cfg.category || "other",
+      date: dt.date,
+      time: dt.time,
+      price: cfg.price || PRICE_FALLBACK,
+      ticketUrl: ev.url || cfg.url,
+      description: ev.description,
+    });
+  }
+  return out;
+}
+
+// ---- Ticketmaster --------------------------------------------------------
 function mapTmEvent(e: any) {
-  const c = e.classifications?.[0];
-  let category = "concerts";
-  if (c?.segment?.name === "Sports") category = "sports";
-  else if (c?.segment?.name === "Music") category = "concerts";
-  else if (["Classical", "Opera", "Orchestral"].includes(c?.genre?.name)) category = "classical";
-  else if (c?.genre?.name === "Dance") category = "dance";
-  else category = "broadway";
-  const venue = e._embedded?.venues?.[0]?.name || "NYC Venue";
+  const seg = e.classifications?.[0]?.segment?.name || "";
+  const venue = e._embedded?.venues?.[0]?.name || "East Bay Venue";
+  let category = categorizeEvent(e.name, e.info || e.description || "", venue);
+  if (category === "other") {
+    if (seg === "Music") category = "music";
+    else if (seg === "Sports") category = "play";
+    else category = "shows"; // Family / Arts & Theatre / Film
+  }
   let price = PRICE_FALLBACK;
   if (e.priceRanges?.[0]) {
     const min = Math.round(e.priceRanges[0].min || 0);
@@ -153,15 +305,15 @@ function mapTmEvent(e: any) {
   }
   const imgs = e.images ? [...e.images].sort((a: any, b: any) => b.width - a.width) : [];
   const image = imgs.find((i: any) => i.ratio === "16_9")?.url || imgs[0]?.url || "";
-  const start = e.dates?.start?.dateTime || `${e.dates?.start?.localDate}T19:00:00Z`;
+  const start = e.dates?.start?.dateTime || `${e.dates?.start?.localDate}T17:00:00Z`;
   return {
     title: e.name,
     artist: e._embedded?.attractions?.[0]?.name || "",
     venue,
-    area: e._embedded?.venues?.[0]?.city?.name || "New York",
+    area: e._embedded?.venues?.[0]?.city?.name || "Contra Costa",
     category,
     date: start.split("T")[0],
-    time: (start.split("T")[1] || "19:00").slice(0, 5),
+    time: (start.split("T")[1] || "17:00").slice(0, 5),
     price,
     ticketUrl: e.url,
     image,
@@ -170,15 +322,15 @@ function mapTmEvent(e: any) {
   };
 }
 
-// Page through the Ticketmaster Discovery API for NYC (dmaId 345) to pull far
-// more than one page of events. Deep paging is capped at 1000 results.
+// Page through the Ticketmaster Discovery API for Family-classified events
+// within 15 miles of Walnut Creek (geohash 9q9pw). Deep paging capped at 1000.
 async function fetchTicketmaster(key: string): Promise<any[]> {
   const now = new Date().toISOString().split(".")[0] + "Z";
   const size = 100;
   const maxPages = 5;
   const raw: any[] = [];
   for (let page = 0; page < maxPages; page++) {
-    const url = `https://app.ticketmaster.com/discovery/v2/events.json?apikey=${key}&dmaId=345&sort=date,asc&size=${size}&page=${page}&startDateTime=${now}&locale=*`;
+    const url = `https://app.ticketmaster.com/discovery/v2/events.json?apikey=${key}&geoPoint=9q9pw&radius=15&unit=miles&classificationName=Family&sort=date,asc&size=${size}&page=${page}&startDateTime=${now}&locale=*`;
     const res = await fetchWithRetry(url);
     if (!res.ok) {
       if (page === 0) throw new Error(`Ticketmaster ${res.status}`);
@@ -276,74 +428,26 @@ async function extractFromUrl(url: string, geminiKey?: string): Promise<any[]> {
   }
 }
 
-// Pull events from a NYC Open Data (Socrata) dataset via the SODA API.
-// Structured JSON — no scraping or AI, so it's reliable. Field names vary by
-// dataset, so we use the configured field then fall back to common names.
-function pickField(row: any, configured: string | undefined, candidates: string[]): any {
-  if (configured && row[configured] != null) return row[configured];
-  for (const k of candidates) if (row[k] != null) return row[k];
-  return undefined;
-}
-
-async function fetchSocrata(cfg: SocrataCfg, appToken?: string): Promise<any[]> {
-  const url = `https://data.cityofnewyork.us/resource/${cfg.id}.json?$limit=${cfg.limit || 500}`;
-  const headers: any = { Accept: "application/json" };
-  if (appToken) headers["X-App-Token"] = appToken;
-  const res = await fetchWithRetry(url, { headers });
-  if (!res.ok) throw new Error(`Socrata ${cfg.id} HTTP ${res.status}`);
-  const rows: any = await res.json();
-  if (!Array.isArray(rows)) return [];
-  const out: any[] = [];
-  for (const row of rows) {
-    let rawDate = pickField(row, cfg.dateField, ["start_date_time", "start_date", "startdate", "date", "datetime", "start", "event_date", "date_time", "performance_date"]);
-    if (rawDate && typeof rawDate === "object") rawDate = rawDate.$date || rawDate.date || "";
-    const title = pickField(row, cfg.titleField, ["title", "name", "event_name", "eventname", "program", "headline", "show"]);
-    if (!rawDate || !title) continue;
-    const dt = new Date(rawDate);
-    if (isNaN(dt.getTime())) continue;
-    const iso = dt.toISOString();
-    const venue = pickField(row, cfg.venueField, ["venue", "location", "park_name", "place", "address", "borough", "site"]);
-    const desc = pickField(row, cfg.descField, ["snippet", "description", "summary", "details", "event_description"]);
-    const link = pickField(row, cfg.urlField, ["event_url", "url", "link", "website", "permalink", "tickets"]);
-    const venueStr = venue ? String(venue) : "New York";
-    const descStr = typeof desc === "string" ? desc.replace(/<[^>]+>/g, "").trim().slice(0, 400) : "";
-    // Auto-categorize from the content; fall back to the dataset's hint only if unknown.
-    const guessedCat = categorizeEvent(String(title), descStr, venueStr);
-    out.push({
-      title: String(title).trim(),
-      artist: "",
-      venue: venueStr,
-      category: guessedCat !== "other" ? guessedCat : cfg.category || "other",
-      date: iso.split("T")[0],
-      time: iso.split("T")[1].slice(0, 5),
-      price: cfg.price || PRICE_FALLBACK,
-      ticketUrl: typeof link === "string" && link ? link : `https://data.cityofnewyork.us/d/${cfg.id}`,
-      description: descStr,
-    });
-  }
-  return out;
-}
-
-// SerpApi Google Events engine — structured NYC event results.
-// Note: SerpApi's free tier is ~100 searches/month, so 1 call per hourly run
-// (~720/month) will exceed it. Use a daily schedule or a paid plan if free.
+// SerpApi Google Events engine — structured local family-event results.
+// Note: SerpApi's free tier is ~100 searches/month; the workflow runs twice a
+// day (~60 calls/month for one query), which fits.
 async function fetchSerpApi(key: string): Promise<any[]> {
   const year = new Date().getFullYear();
-  const url = `https://serpapi.com/search.json?engine=google_events&q=${encodeURIComponent("events in New York")}&hl=en&gl=us&api_key=${key}`;
+  const url = `https://serpapi.com/search.json?engine=google_events&q=${encodeURIComponent("kids and family events near Walnut Creek CA")}&hl=en&gl=us&api_key=${key}`;
   const res = await fetchWithRetry(url);
   if (!res.ok) throw new Error(`SerpApi HTTP ${res.status}`);
   const data: any = await res.json();
   const results = Array.isArray(data.events_results) ? data.events_results : [];
   const out: any[] = [];
   for (const e of results) {
-    const venue = e.venue?.name || (Array.isArray(e.address) ? e.address[0] : e.address) || "New York";
+    const venue = e.venue?.name || (Array.isArray(e.address) ? e.address[0] : e.address) || "Contra Costa";
     let ticketUrl = e.link || "";
     if (Array.isArray(e.ticket_info) && e.ticket_info.length) {
       ticketUrl = e.ticket_info[0].link || e.ticket_info[0].source_link || e.link || "";
     }
     const whenStr = e.date?.when || e.date?.start_date || "";
     let dateVal = "";
-    let timeVal = "19:00";
+    let timeVal = "10:00";
     if (whenStr) {
       const cleaned = String(whenStr).replace(/^[A-Za-z]{3},\s*/, "").split(/[–-]/)[0].trim();
       const dt = new Date(`${cleaned} ${year}`);
@@ -357,6 +461,7 @@ async function fetchSerpApi(key: string): Promise<any[]> {
       }
     }
     if (!dateVal || !e.title) continue;
+    if (!isKidAppropriate(e.title, e.description || "")) continue;
     out.push({
       title: e.title,
       artist: "",
@@ -378,6 +483,30 @@ async function main() {
   const perSource: Record<string, number> = {};
   const all: any[] = [];
 
+  // 1. Curated recurring schedules — always available, no network needed.
+  for (const cfg of readJsonConfig("recurring-sources.json", "events") as RecurringCfg[]) {
+    const label = cfg.source || hostOf(cfg.url);
+    const rows = expandRecurring(cfg);
+    rows.forEach((e) => all.push(normalizeEvent(e, cfg.url, "Recurring", label)));
+    perSource[label] = (perSource[label] || 0) + rows.length;
+  }
+  console.log(`Recurring schedules: ${all.length} events`);
+
+  // 2. iCal feeds — structured, no AI.
+  for (const cfg of readJsonConfig("ical-sources.json", "feeds") as IcalCfg[]) {
+    const label = cfg.source || hostOf(cfg.url);
+    try {
+      const rows = await fetchIcal(cfg);
+      rows.forEach((e) => all.push(normalizeEvent(e, e.ticketUrl, "City Feed", label)));
+      perSource[label] = (perSource[label] || 0) + rows.length;
+      console.log(`${label} (ical): ${rows.length} events`);
+    } catch (err) {
+      console.warn(`iCal ${cfg.url} failed:`, (err as any)?.message);
+      perSource[label] = perSource[label] || 0;
+    }
+  }
+
+  // 3. Ticketmaster Discovery (Family events near Walnut Creek).
   if (tmKey) {
     try {
       const tm = await fetchTicketmaster(tmKey);
@@ -391,19 +520,20 @@ async function main() {
     console.log("No TICKETMASTER_KEY set — skipping Ticketmaster.");
   }
 
+  // 4. Web sources: JSON-LD -> Playwright -> Gemini.
   for (const src of readSources()) {
     try {
-      const events = await extractFromUrl(src, geminiKey);
+      const events = (await extractFromUrl(src, geminiKey)).filter((e) => isKidAppropriate(e.title || "", e.description || ""));
       events.forEach((e) => all.push(normalizeEvent(e, src, "Gemini")));
-      perSource[hostOf(src)] = events.length;
+      perSource[hostOf(src)] = (perSource[hostOf(src)] || 0) + events.length;
       console.log(`${hostOf(src)}: ${events.length} events`);
     } catch (err) {
       console.warn(`Failed ${src}:`, (err as any)?.message);
-      perSource[hostOf(src)] = 0;
+      perSource[hostOf(src)] = perSource[hostOf(src)] || 0;
     }
   }
 
-  // SerpApi Google Events — structured NYC results (optional).
+  // 5. SerpApi Google Events — structured local results (optional).
   const serpKey = process.env.SERPAPI_KEY;
   if (serpKey) {
     try {
@@ -413,21 +543,6 @@ async function main() {
       console.log(`SerpApi: ${rows.length} events`);
     } catch (err) {
       console.warn("SerpApi failed:", (err as any)?.message);
-    }
-  }
-
-  // NYC Open Data (Socrata) datasets — reliable structured JSON.
-  const socToken = process.env.SOCRATA_APP_TOKEN;
-  for (const cfg of readSocrataSources()) {
-    const label = cfg.source || "data.cityofnewyork.us";
-    try {
-      const rows = await fetchSocrata(cfg, socToken);
-      rows.forEach((e) => all.push(normalizeEvent(e, e.ticketUrl, "NYC Open Data", label)));
-      perSource[label] = (perSource[label] || 0) + rows.length;
-      console.log(`${label} (${cfg.id}): ${rows.length} events`);
-    } catch (err) {
-      console.warn(`Socrata ${cfg.id} failed:`, (err as any)?.message);
-      perSource[label] = perSource[label] || 0;
     }
   }
 

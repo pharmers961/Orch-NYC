@@ -123,7 +123,7 @@ export function EventModal({
               ))
             ) : (
               <span className="text-slate-400 dark:text-zinc-500 italic text-[11px] py-1">
-                No tags. Add custom tags below to help categorize this event (e.g. "wnyc", "podcast", "jazz")
+                No tags. Add custom tags below to help categorize this event (e.g. "toddler", "indoor", "free")
               </span>
             )}
           </div>

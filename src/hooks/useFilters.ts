@@ -1,7 +1,7 @@
 import { useCallback, useMemo, useState } from "react";
 import { EventItem, EventCategory } from "../types";
 import { ALL_CATEGORY_IDS } from "../lib/constants";
-import { getBorough, parseLowestNumericPrice } from "../lib/events";
+import { getCity, parseLowestNumericPrice } from "../lib/events";
 
 export type DateFilter = "all" | "today" | "weekend" | "week" | "month" | "custom";
 export type SortBy = "soonest" | "lowestPrice" | "recentlyAdded" | "endingSoon";
@@ -18,7 +18,7 @@ export function useFilters(events: EventItem[], savedIds: string[], viewMode: Vi
   const [searchQuery, setSearchQuery] = useState("");
   const [sortBy, setSortBy] = useState<SortBy>("soonest");
   const [savedOnly, setSavedOnly] = useState(false);
-  const [selectedBoroughs, setSelectedBoroughs] = useState<string[]>([]);
+  const [selectedCities, setSelectedCities] = useState<string[]>([]);
   const [maxPrice, setMaxPrice] = useState<number>(0); // 0 = no cap
   const [freeOnly, setFreeOnly] = useState(false);
 
@@ -52,7 +52,7 @@ export function useFilters(events: EventItem[], savedIds: string[], viewMode: Vi
         if (!selectedCategories.includes(e.cat)) return false;
         if (hiddenSources.includes(e.source)) return false;
         if (selectedVenues.length > 0 && !selectedVenues.includes(e.venue)) return false;
-        if (selectedBoroughs.length > 0 && !selectedBoroughs.includes(getBorough(e.area, e.venue))) return false;
+        if (selectedCities.length > 0 && !selectedCities.includes(getCity(e.area, e.venue))) return false;
 
         const isFree = /free/i.test(e.price) || parseLowestNumericPrice(e.price) === 0;
         if (freeOnly && !isFree) return false;
@@ -136,7 +136,7 @@ export function useFilters(events: EventItem[], savedIds: string[], viewMode: Vi
         return 0;
       });
   }, [
-    events, selectedCategories, hiddenSources, selectedVenues, selectedBoroughs, maxPrice, freeOnly,
+    events, selectedCategories, hiddenSources, selectedVenues, selectedCities, maxPrice, freeOnly,
     savedOnly, savedIds, searchQuery, dateFilter, customStart, customEnd, sortBy, selectedTags, viewMode,
   ]);
 
@@ -159,7 +159,7 @@ export function useFilters(events: EventItem[], savedIds: string[], viewMode: Vi
     setSelectedCategories(ALL_CATEGORY_IDS);
     setHiddenSources([]);
     setSelectedVenues([]);
-    setSelectedBoroughs([]);
+    setSelectedCities([]);
     setMaxPrice(0);
     setFreeOnly(false);
     setDateFilter("all");
@@ -174,7 +174,7 @@ export function useFilters(events: EventItem[], savedIds: string[], viewMode: Vi
     selectedCategories.length !== ALL_CATEGORY_IDS.length ||
     hiddenSources.length > 0 ||
     selectedVenues.length > 0 ||
-    selectedBoroughs.length > 0 ||
+    selectedCities.length > 0 ||
     maxPrice > 0 ||
     freeOnly ||
     dateFilter !== "all" ||
@@ -194,7 +194,7 @@ export function useFilters(events: EventItem[], savedIds: string[], viewMode: Vi
     searchQuery, setSearchQuery,
     sortBy, setSortBy,
     savedOnly, setSavedOnly,
-    selectedBoroughs, setSelectedBoroughs,
+    selectedCities, setSelectedCities,
     maxPrice, setMaxPrice,
     freeOnly, setFreeOnly,
     // derived

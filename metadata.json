@@ -1,6 +1,6 @@
 {
-  "name": "Orch",
-  "description": "Live events guide for New York City - aggregating concerts, sports, Broadway, classical and more with direct ticket links.",
+  "name": "Sprout Scout",
+  "description": "Kid-friendly events calendar for the East Bay (Central Contra Costa) - aggregating storytimes, free store workshops, music in the park, festivals and family fun with direct links.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

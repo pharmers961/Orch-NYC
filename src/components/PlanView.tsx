@@ -46,7 +46,7 @@ export function PlanView({
         <div className="p-12 text-center rounded-2xl bg-white/60 dark:bg-zinc-950/60 border border-slate-200/60 dark:border-zinc-800">
           <Heart size={32} className="text-slate-300 mx-auto mb-4" />
           <h3 className="font-bold text-base text-slate-800 dark:text-zinc-200">Your plan is empty</h3>
-          <p className="text-sm text-slate-500 dark:text-zinc-400 mt-2">Tap the heart on any event to build your NYC itinerary here.</p>
+          <p className="text-sm text-slate-500 dark:text-zinc-400 mt-2">Tap the heart on any event to build your family's lineup here.</p>
         </div>
       ) : (
         <>

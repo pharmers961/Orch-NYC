@@ -4,13 +4,13 @@
  */
 
 export type EventCategory =
-  | "classical"
-  | "broadway"
-  | "concerts"
-  | "sports"
-  | "arts"
-  | "dance"
-  | "talks"
+  | "storytime"
+  | "crafts"
+  | "music"
+  | "shows"
+  | "nature"
+  | "play"
+  | "festivals"
   | "other";
 
 export interface EventItem {
@@ -27,8 +27,8 @@ export interface EventItem {
   ticketUrl: string;
   image: string;
   status?: string; // e.g. 'onsale', 'cancelled', 'offsale', etc.
-  source: string; // Source portal or site URL (e.g., Ticketmaster, wnyc.org, carnegiehall.org)
-  provider: "Ticketmaster" | "Gemini" | "SerpApi" | "Manual" | "NYC Open Data";
+  source: string; // Source portal or site URL (e.g., Ticketmaster, ccclib.org, lesherartscenter.org)
+  provider: "Ticketmaster" | "Gemini" | "SerpApi" | "Manual" | "City Feed" | "Recurring";
   added: number; // timestamp
   tags?: string[]; // Optional user/parsing tags
 }

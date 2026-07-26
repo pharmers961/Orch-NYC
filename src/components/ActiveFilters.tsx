@@ -44,8 +44,8 @@ export function ActiveFilters({ filters, totalCategories }: { filters: Filters; 
   if (filters.maxPrice > 0)
     chips.push({ key: "price", label: `Up to $${filters.maxPrice}`, onRemove: () => filters.setMaxPrice(0) });
 
-  filters.selectedBoroughs.forEach((b) =>
-    chips.push({ key: `b-${b}`, label: b, onRemove: () => filters.setSelectedBoroughs((prev) => prev.filter((x) => x !== b)) })
+  filters.selectedCities.forEach((b) =>
+    chips.push({ key: `b-${b}`, label: b, onRemove: () => filters.setSelectedCities((prev) => prev.filter((x) => x !== b)) })
   );
 
   filters.selectedVenues.forEach((v) =>

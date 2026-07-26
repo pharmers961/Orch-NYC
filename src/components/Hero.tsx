@@ -4,15 +4,15 @@ export function Hero({ stats }: { stats: { events: number; venues: number; sourc
       <div>
         <div className="flex items-center gap-2 mb-2">
           <span className="text-[10px] font-bold text-emerald-600 dark:text-emerald-500 uppercase tracking-widest font-mono">
-            Orch v3
+            Sprout Scout
           </span>
         </div>
         <h1 className="text-4xl lg:text-5xl font-extrabold tracking-tight mb-2 text-slate-900 dark:text-white font-display">
-          Everything happening <br className="hidden sm:inline" />
-          in New York.
+          Kid-friendly fun, <br className="hidden sm:inline" />
+          all over the East Bay.
         </h1>
         <p className="text-lg font-bold tracking-tight text-slate-800 dark:text-zinc-200 font-display">
-          Orchestrate the chaos.
+          Storytimes, crafts, music in the park &amp; more.
         </p>
         <p
           className="text-slate-600 dark:text-zinc-300 text-sm font-medium mb-2 cursor-default"

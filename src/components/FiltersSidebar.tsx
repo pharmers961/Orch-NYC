@@ -1,7 +1,7 @@
 import React, { useState } from "react";
 import { X } from "lucide-react";
 import { EventItem, EventCategory } from "../types";
-import { CATEGORIES, NYC_BOROUGHS } from "../lib/constants";
+import { CATEGORIES, CITIES } from "../lib/constants";
 import { formatSourceLabel } from "../lib/events";
 
 function activate(fn: () => void) {
@@ -35,8 +35,8 @@ export function FiltersSidebar({
   onCloseSidebar,
   selectedCategories,
   onToggleCategory,
-  selectedBoroughs,
-  setSelectedBoroughs,
+  selectedCities,
+  setSelectedCities,
   freeOnly,
   setFreeOnly,
   maxPrice,
@@ -62,8 +62,8 @@ export function FiltersSidebar({
   onCloseSidebar: () => void;
   selectedCategories: EventCategory[];
   onToggleCategory: (c: EventCategory) => void;
-  selectedBoroughs: string[];
-  setSelectedBoroughs: React.Dispatch<React.SetStateAction<string[]>>;
+  selectedCities: string[];
+  setSelectedCities: React.Dispatch<React.SetStateAction<string[]>>;
   freeOnly: boolean;
   setFreeOnly: (b: boolean) => void;
   maxPrice: number;
@@ -129,21 +129,21 @@ export function FiltersSidebar({
         </div>
       </div>
 
-      {/* Borough */}
+      {/* City */}
       <div className="space-y-3 pt-2">
         <div className="flex items-center justify-between">
-          <h3 className="text-[10px] font-bold text-slate-400 dark:text-zinc-500 uppercase tracking-widest">Borough</h3>
-          {selectedBoroughs.length > 0 && (
-            <button onClick={() => setSelectedBoroughs([])} className="text-[10px] text-indigo-600 dark:text-[#5e5ce6] font-semibold hover:underline">Clear</button>
+          <h3 className="text-[10px] font-bold text-slate-400 dark:text-zinc-500 uppercase tracking-widest">City</h3>
+          {selectedCities.length > 0 && (
+            <button onClick={() => setSelectedCities([])} className="text-[10px] text-indigo-600 dark:text-[#5e5ce6] font-semibold hover:underline">Clear</button>
           )}
         </div>
         <div className="flex flex-wrap gap-1.5">
-          {NYC_BOROUGHS.map((b) => {
-            const active = selectedBoroughs.includes(b);
+          {CITIES.map((b) => {
+            const active = selectedCities.includes(b);
             return (
               <button
                 key={b}
-                onClick={() => setSelectedBoroughs((prev) => (prev.includes(b) ? prev.filter((x) => x !== b) : [...prev, b]))}
+                onClick={() => setSelectedCities((prev) => (prev.includes(b) ? prev.filter((x) => x !== b) : [...prev, b]))}
                 className={`px-2.5 py-1 rounded-full text-[10px] font-semibold border transition-all ${active ? "bg-indigo-600 text-white border-indigo-600" : "bg-white dark:bg-zinc-900 border-slate-200 dark:border-zinc-800 text-slate-600 dark:text-zinc-400 hover:border-indigo-400"}`}
               >
                 {b}

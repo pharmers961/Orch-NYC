@@ -1,0 +1,47 @@
+{
+  "_comment": "iCal (.ics) feeds pulled by scripts/ingest.ts — structured data, no scraping or AI. CivicPlus/CivicEngage cities publish iCal at /common/modules/iCalendar/iCalendar.aspx and per-category feeds are listed on each city's iCalendar.aspx page (e.g. danville.ca.gov/iCalendar.aspx). URLs below use the standard platform patterns; a wrong URL just yields 0 events (logged), never breaks the run. Confirm/refine category IDs from each city's subscribe page.",
+  "feeds": [
+    {
+      "url": "https://www.danville.ca.gov/common/modules/iCalendar/iCalendar.aspx?catID=26&feed=calendar",
+      "source": "danville.ca.gov",
+      "area": "Danville",
+      "venue": "Danville"
+    },
+    {
+      "url": "https://www.cityofconcord.org/common/modules/iCalendar/iCalendar.aspx?catID=33&feed=calendar",
+      "source": "cityofconcord.org",
+      "area": "Concord",
+      "venue": "Concord"
+    },
+    {
+      "url": "https://www.phillca.gov/common/modules/iCalendar/iCalendar.aspx?feed=calendar",
+      "source": "phillca.gov",
+      "area": "Pleasant Hill",
+      "venue": "Pleasant Hill"
+    },
+    {
+      "url": "https://pleasanthillrec.com/common/modules/iCalendar/iCalendar.aspx?feed=calendar",
+      "source": "pleasanthillrec.com",
+      "area": "Pleasant Hill",
+      "venue": "Pleasant Hill Rec & Park"
+    },
+    {
+      "url": "https://www.moraga.ca.us/common/modules/iCalendar/iCalendar.aspx?feed=calendar",
+      "source": "moraga.ca.us",
+      "area": "Moraga",
+      "venue": "Moraga"
+    },
+    {
+      "url": "https://www.cityoforinda.org/common/modules/iCalendar/iCalendar.aspx?feed=calendar",
+      "source": "cityoforinda.org",
+      "area": "Orinda",
+      "venue": "Orinda"
+    },
+    {
+      "url": "https://www.claytonca.gov/common/modules/iCalendar/iCalendar.aspx?feed=calendar",
+      "source": "claytonca.gov",
+      "area": "Clayton",
+      "venue": "Clayton"
+    }
+  ]
+}
