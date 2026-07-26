@@ -28,9 +28,13 @@ const dedupeTitle = (title: string) =>
     .replace(/[^a-z0-9]/g, "")
     .slice(0, 18);
 
+// v2: fresh cache namespace — abandons NYC-era and pre-timezone-fix event
+// copies stored under the old "marquee_events" key on returning devices.
+const EVENTS_CACHE_KEY = "ss_events_v2";
+
 export function useEvents() {
   const [events, setEvents] = useState<EventItem[]>(() => {
-    const saved = localStorage.getItem("marquee_events");
+    const saved = localStorage.getItem(EVENTS_CACHE_KEY);
     if (saved) {
       try {
         const parsed = JSON.parse(saved);
@@ -60,7 +64,8 @@ export function useEvents() {
 
   // Persistence
   useEffect(() => {
-    localStorage.setItem("marquee_events", JSON.stringify(events));
+    localStorage.setItem(EVENTS_CACHE_KEY, JSON.stringify(events));
+    localStorage.removeItem("marquee_events"); // clear the legacy cache
   }, [events]);
   useEffect(() => {
     localStorage.setItem("marquee_saved_ids", JSON.stringify(savedIds));
