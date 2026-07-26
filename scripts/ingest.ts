@@ -17,7 +17,8 @@
 import { writeFileSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
-import { fetchWithRetry, extractJsonLdEvents, geminiExtractEventsFromUrl, categorizeEvent, isKidAppropriate, PRICE_FALLBACK } from "../serverLib";
+import { fetchWithRetry, extractJsonLdEvents, geminiExtractEventsFromUrl, categorizeEvent, isKidAppropriate, PRICE_FALLBACK, laWallToUtc, parseIcs, parseIcsDateValue } from "../serverLib";
+import { platformExtract, ScrapeContext } from "./scrapers";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, "..");
@@ -151,28 +152,6 @@ function normalizeEvent(raw: any, sourceUrl: string, provider: string, sourceHos
   };
 }
 
-// ---- Pacific-time helpers ------------------------------------------------
-// Convert an America/Los_Angeles wall time to the corresponding UTC instant
-// (handles DST via Intl, two-pass fixed-point).
-function laWallToUtc(y: number, mo: number, d: number, hh: number, mm: number): Date {
-  const target = Date.UTC(y, mo - 1, d, hh, mm);
-  let guess = target;
-  for (let i = 0; i < 3; i++) {
-    const dtf = new Intl.DateTimeFormat("en-US", {
-      timeZone: "America/Los_Angeles",
-      year: "numeric", month: "2-digit", day: "2-digit",
-      hour: "2-digit", minute: "2-digit", hourCycle: "h23",
-    });
-    const parts: Record<string, string> = {};
-    dtf.formatToParts(new Date(guess)).forEach((p) => (parts[p.type] = p.value));
-    const seen = Date.UTC(+parts.year, +parts.month - 1, +parts.day, +parts.hour, +parts.minute);
-    const diff = target - seen;
-    if (diff === 0) break;
-    guess += diff;
-  }
-  return new Date(guess);
-}
-
 // ---- Recurring curated schedules ----------------------------------------
 // Expands fixed weekly/monthly schedules (store kids' workshops, farmers
 // markets, concert series) into concrete events for the next ~7 weeks.
@@ -212,43 +191,9 @@ function expandRecurring(cfg: RecurringCfg, horizonDays = 49): any[] {
 }
 
 // ---- iCal feeds ----------------------------------------------------------
-// Minimal ICS parser: unfold lines, walk VEVENT blocks, read the fields we
-// use. City calendars mix in meetings/senior programming, so events run
-// through a civic-noise blocklist plus the shared kid-appropriateness check.
+// City calendars mix in meetings/senior programming, so events run through a
+// civic-noise blocklist plus the shared kid-appropriateness check.
 const CIVIC_NOISE = /(city council|town council|planning commission|committee|commission meeting|board meeting|closed session|study session|task force|public hearing|budget|senior (center|bingo|lunch|social|trip)|blood drive|job fair|adults? \(?(18|21)|ballot|election)/i;
-
-function parseIcsDateValue(value: string): { date: string; time: string } | null {
-  let m = /^(\d{4})(\d{2})(\d{2})$/.exec(value);
-  if (m) return { date: `${m[1]}-${m[2]}-${m[3]}`, time: "10:00" }; // all-day
-  m = /^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})?(Z)?$/.exec(value);
-  if (!m) return null;
-  const iso = m[7]
-    ? new Date(Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +(m[6] || "0"))).toISOString()
-    : laWallToUtc(+m[1], +m[2], +m[3], +m[4], +m[5]).toISOString(); // floating/TZID -> Pacific
-  return { date: iso.split("T")[0], time: iso.slice(11, 16) };
-}
-
-export function parseIcs(text: string): { summary: string; dtstart: string; description: string; location: string; url: string }[] {
-  const lines = text.replace(/\r\n[ \t]/g, "").replace(/\n[ \t]/g, "").split(/\r?\n/);
-  const events: any[] = [];
-  let cur: any = null;
-  for (const line of lines) {
-    if (line === "BEGIN:VEVENT") { cur = { summary: "", dtstart: "", description: "", location: "", url: "" }; continue; }
-    if (line === "END:VEVENT") { if (cur) events.push(cur); cur = null; continue; }
-    if (!cur) continue;
-    const idx = line.indexOf(":");
-    if (idx < 0) continue;
-    const [nameAndParams, value] = [line.slice(0, idx), line.slice(idx + 1)];
-    const name = nameAndParams.split(";")[0].toUpperCase();
-    const unescape = (v: string) => v.replace(/\\n/g, " ").replace(/\\,/g, ",").replace(/\\;/g, ";").trim();
-    if (name === "SUMMARY") cur.summary = unescape(value);
-    else if (name === "DTSTART") cur.dtstart = value.trim();
-    else if (name === "DESCRIPTION") cur.description = unescape(value).replace(/<[^>]+>/g, "").slice(0, 400);
-    else if (name === "LOCATION") cur.location = unescape(value);
-    else if (name === "URL") cur.url = value.trim();
-  }
-  return events;
-}
 
 async function fetchIcal(cfg: IcalCfg): Promise<any[]> {
   const res = await fetchWithRetry(cfg.url, {
@@ -323,14 +268,15 @@ function mapTmEvent(e: any) {
 }
 
 // Page through the Ticketmaster Discovery API for Family-classified events
-// within 15 miles of Walnut Creek (geohash 9q9pw). Deep paging capped at 1000.
+// within 25 miles of Walnut Creek (geohash 9q9pw) — wide enough to catch
+// Oakland/Concord Pavilion family shows. Deep paging capped at 1000.
 async function fetchTicketmaster(key: string): Promise<any[]> {
   const now = new Date().toISOString().split(".")[0] + "Z";
   const size = 100;
   const maxPages = 5;
   const raw: any[] = [];
   for (let page = 0; page < maxPages; page++) {
-    const url = `https://app.ticketmaster.com/discovery/v2/events.json?apikey=${key}&geoPoint=9q9pw&radius=15&unit=miles&classificationName=Family&sort=date,asc&size=${size}&page=${page}&startDateTime=${now}&locale=*`;
+    const url = `https://app.ticketmaster.com/discovery/v2/events.json?apikey=${key}&geoPoint=9q9pw&radius=25&unit=miles&classificationName=Family&sort=date,asc&size=${size}&page=${page}&startDateTime=${now}&locale=*`;
     const res = await fetchWithRetry(url);
     if (!res.ok) {
       if (page === 0) throw new Error(`Ticketmaster ${res.status}`);
@@ -371,16 +317,35 @@ async function closeBrowser(): Promise<void> {
   browserPromise = null;
 }
 async function renderHtml(url: string): Promise<string | null> {
+  const rendered = await renderWithCapture(url);
+  return rendered ? rendered.html : null;
+}
+
+// Render a page AND capture the JSON responses it fetches from its own APIs —
+// this is how the SPA scrapers (BiblioCommons, Macaroni KID) see event data
+// that never appears in the DOM as parseable markup.
+async function renderWithCapture(url: string): Promise<{ html: string; jsonBlobs: any[] } | null> {
   const browser = await getBrowser();
   if (!browser) return null;
   let page: any;
+  const jsonBlobs: any[] = [];
   try {
     page = await browser.newPage({
       userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
     });
+    page.on("response", async (res: any) => {
+      try {
+        const ct = (res.headers()["content-type"] || "").toLowerCase();
+        if (!ct.includes("json")) return;
+        const body = await res.json().catch(() => null);
+        if (body && jsonBlobs.length < 40) jsonBlobs.push(body);
+      } catch {
+        // response already disposed / non-JSON — ignore
+      }
+    });
     await page.goto(url, { waitUntil: "domcontentloaded", timeout: 25000 });
-    await page.waitForTimeout(2500); // let client-side JS populate the calendar
-    return await page.content();
+    await page.waitForTimeout(3500); // let client-side JS populate the calendar
+    return { html: await page.content(), jsonBlobs };
   } catch (err) {
     console.warn(`Playwright render failed for ${url}:`, (err as any)?.message);
     return null;
@@ -388,6 +353,8 @@ async function renderHtml(url: string): Promise<string | null> {
     if (page) await page.close().catch(() => {});
   }
 }
+
+const scrapeCtx: ScrapeContext = { renderWithCapture };
 
 async function extractFromUrl(url: string, geminiKey?: string): Promise<any[]> {
   let html = "";
@@ -520,13 +487,20 @@ async function main() {
     console.log("No TICKETMASTER_KEY set — skipping Ticketmaster.");
   }
 
-  // 4. Web sources: JSON-LD -> Playwright -> Gemini.
+  // 4. Web sources: platform scraper first, then JSON-LD -> Playwright -> Gemini.
   for (const src of readSources()) {
     try {
-      const events = (await extractFromUrl(src, geminiKey)).filter((e) => isKidAppropriate(e.title || "", e.description || ""));
-      events.forEach((e) => all.push(normalizeEvent(e, src, "Gemini")));
+      let provider = "Scraper";
+      let events = (await platformExtract(src, scrapeCtx)).filter(
+        (e) => isKidAppropriate(e.title || "", e.description || "") && !CIVIC_NOISE.test(`${e.title} ${e.description || ""}`)
+      );
+      if (events.length === 0) {
+        provider = "Gemini";
+        events = (await extractFromUrl(src, geminiKey)).filter((e) => isKidAppropriate(e.title || "", e.description || ""));
+      }
+      events.forEach((e) => all.push(normalizeEvent(e, src, provider)));
       perSource[hostOf(src)] = (perSource[hostOf(src)] || 0) + events.length;
-      console.log(`${hostOf(src)}: ${events.length} events`);
+      console.log(`${hostOf(src)} (${provider.toLowerCase()}): ${events.length} events`);
     } catch (err) {
       console.warn(`Failed ${src}:`, (err as any)?.message);
       perSource[hostOf(src)] = perSource[hostOf(src)] || 0;
@@ -551,7 +525,12 @@ async function main() {
   // Accumulate: merge with the previous feed so events captured in earlier runs
   // persist even when a flaky AI extraction returns nothing this run. Fresh
   // scrape results win on id collisions (so details/dates stay current).
-  const prev = readPrevEvents();
+  // Legacy guard: drop anything from the app's NYC era (old categories/areas)
+  // so the rebranded feed can never re-accumulate it.
+  const LEGACY_AREA = /(new york|manhattan|brooklyn|queens|bronx|staten)/i;
+  const prev = readPrevEvents().filter(
+    (e) => VALID_CATS.includes(e?.cat) && !LEGACY_AREA.test(`${e?.area || ""} ${e?.venue || ""}`) && e?.provider !== "NYC Open Data"
+  );
   const cutoff = Date.now() - 24 * 60 * 60 * 1000;
   const byId = new Map<string, any>();
   [...prev, ...all]
