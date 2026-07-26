@@ -63,7 +63,10 @@ async function tribeApi(url: string): Promise<any[]> {
     if (!e?.title || !e?.start_date) continue; // start_date: "YYYY-MM-DD HH:MM:SS" local
     const m = /^(\d{4}-\d{2}-\d{2})[T ](\d{2}:\d{2})/.exec(e.start_date);
     if (!m) continue;
-    const parsed = parseIcsDateValue(`${m[1].replace(/-/g, "")}T${m[2].replace(":", "")}00`);
+    // All-day events come through at 00:00 — surface them mid-morning
+    // instead of midnight.
+    const wallTime = e.all_day || m[2] === "00:00" ? "10:00" : m[2];
+    const parsed = parseIcsDateValue(`${m[1].replace(/-/g, "")}T${wallTime.replace(":", "")}00`);
     if (!parsed || !windowDays(parsed.date, parsed.time)) continue;
     const title = String(e.title).replace(/<[^>]+>/g, "").trim();
     const desc = String(e.description || e.excerpt || "").replace(/<[^>]+>/g, "").trim().slice(0, 400);

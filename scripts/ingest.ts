@@ -208,7 +208,7 @@ function expandRecurring(cfg: RecurringCfg, horizonDays = 49): any[] {
 // ---- iCal feeds ----------------------------------------------------------
 // City calendars mix in meetings/senior programming, so events run through a
 // civic-noise blocklist plus the shared kid-appropriateness check.
-const CIVIC_NOISE = /(city council|town council|planning commission|committee|commission meeting|board meeting|closed session|study session|task force|public hearing|budget|senior (center|bingo|lunch|social|trip)|blood drive|job fair|adults? \(?(18|21)|ballot|election)/i;
+const CIVIC_NOISE = /(city council|town council|planning commission|committee|commission meeting|board meeting|closed session|study session|task force|public hearing|budget|senior (center|bingo|lunch|social|trip)|blood drive|job fair|adults? \(?(18|21)|ballot|election|offices? closed|holiday closure|garbage|recycling|street sweeping)/i;
 
 async function fetchIcal(cfg: IcalCfg): Promise<any[]> {
   const res = await fetchWithRetry(cfg.url, {
@@ -579,7 +579,11 @@ async function main() {
   const LEGACY_AREA = /(new york|manhattan|brooklyn|queens|bronx|staten)/i;
   const prev = readPrevEvents()
     .filter(
-      (e) => VALID_CATS.includes(e?.cat) && !LEGACY_AREA.test(`${e?.area || ""} ${e?.venue || ""}`) && e?.provider !== "NYC Open Data"
+      (e) =>
+        VALID_CATS.includes(e?.cat) &&
+        !LEGACY_AREA.test(`${e?.area || ""} ${e?.venue || ""}`) &&
+        e?.provider !== "NYC Open Data" &&
+        !CIVIC_NOISE.test(`${e?.title || ""} ${e?.desc || ""}`)
     )
     .map((e) => {
       // One-time migration: Gemini/SerpApi events stored before the timezone
