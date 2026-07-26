@@ -130,7 +130,17 @@ const VALID_CATS = ["storytime", "crafts", "music", "shows", "nature", "play", "
 function normalizeEvent(raw: any, sourceUrl: string, provider: string, sourceHost?: string) {
   const cat = VALID_CATS.includes((raw.category || "").toLowerCase()) ? raw.category.toLowerCase() : "other";
   const dateStr = rollForwardIfPast(cleanDate(raw.date));
-  const start = `${dateStr}T${raw.time || "10:00"}:00Z`;
+  // Sources that already resolved times to UTC set raw.utc; everything else
+  // (Gemini, SerpApi) reports Pacific wall time, which must be converted —
+  // storing wall time with a Z suffix displayed "9:00 AM" events at 2:00 AM.
+  let start: string;
+  if (raw.utc) {
+    start = `${dateStr}T${raw.time || "10:00"}:00Z`;
+  } else {
+    const [hh, mm] = String(raw.time || "10:00").split(":").map((n: string) => parseInt(n, 10));
+    const [y, mo, d] = dateStr.split("-").map(Number);
+    start = laWallToUtc(y, mo, d, isNaN(hh) ? 10 : hh, isNaN(mm) ? 0 : mm).toISOString().replace(/\.\d{3}Z$/, "Z");
+  }
   const startTs = new Date(start).getTime();
   const title = (raw.title || "Untitled Event").toString().trim();
   const rawAges = typeof raw.ages === "string" && /^(\d{1,2}-\d{1,2}|all)$/.test(raw.ages.trim()) ? raw.ages.trim() : "";
@@ -152,6 +162,7 @@ function normalizeEvent(raw: any, sourceUrl: string, provider: string, sourceHos
     source: sourceHost || hostOf(sourceUrl),
     sourceUrl,
     provider,
+    tzFixed: true, // marks events produced after the wall-time/UTC fix
   };
 }
 
@@ -183,6 +194,7 @@ function expandRecurring(cfg: RecurringCfg, horizonDays = 49): any[] {
       venue: cfg.venue,
       area: cfg.area,
       category: cfg.category || categorizeEvent(cfg.title, cfg.desc || "", cfg.venue),
+      utc: true,
       date: iso.split("T")[0],
       time: iso.slice(11, 16),
       price: cfg.price || "Free",
@@ -225,6 +237,7 @@ async function fetchIcal(cfg: IcalCfg): Promise<any[]> {
       venue,
       area: cfg.area || "",
       category: guessedCat !== "other" ? guessedCat : cfg.category || "other",
+      utc: true,
       date: dt.date,
       time: dt.time,
       price: cfg.price || PRICE_FALLBACK,
@@ -260,6 +273,7 @@ function mapTmEvent(e: any) {
     venue,
     area: e._embedded?.venues?.[0]?.city?.name || "Contra Costa",
     category,
+    utc: !!e.dates?.start?.dateTime, // dateTime is UTC; localDate fallback is wall time
     date: start.split("T")[0],
     time: (start.split("T")[1] || "17:00").slice(0, 5),
     price,
@@ -563,9 +577,23 @@ async function main() {
   // Legacy guard: drop anything from the app's NYC era (old categories/areas)
   // so the rebranded feed can never re-accumulate it.
   const LEGACY_AREA = /(new york|manhattan|brooklyn|queens|bronx|staten)/i;
-  const prev = readPrevEvents().filter(
-    (e) => VALID_CATS.includes(e?.cat) && !LEGACY_AREA.test(`${e?.area || ""} ${e?.venue || ""}`) && e?.provider !== "NYC Open Data"
-  );
+  const prev = readPrevEvents()
+    .filter(
+      (e) => VALID_CATS.includes(e?.cat) && !LEGACY_AREA.test(`${e?.area || ""} ${e?.venue || ""}`) && e?.provider !== "NYC Open Data"
+    )
+    .map((e) => {
+      // One-time migration: Gemini/SerpApi events stored before the timezone
+      // fix carry Pacific wall time with a Z suffix — reinterpret them once
+      // (tzFixed guards against double-shifting on later runs).
+      if (!e.tzFixed && (e.provider === "Gemini" || e.provider === "SerpApi")) {
+        const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/.exec(e.start || "");
+        if (m) {
+          const start = laWallToUtc(+m[1], +m[2], +m[3], +m[4], +m[5]).toISOString().replace(/\.\d{3}Z$/, "Z");
+          return { ...e, start, startTs: new Date(start).getTime(), tzFixed: true };
+        }
+      }
+      return { ...e, tzFixed: true };
+    });
   const cutoff = Date.now() - 24 * 60 * 60 * 1000;
   const byId = new Map<string, any>();
   [...prev, ...all]

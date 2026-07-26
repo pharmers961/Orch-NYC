@@ -1,6 +1,11 @@
 @import "tailwindcss";
 @import "leaflet/dist/leaflet.css";
 
+/* Tailwind v4 defaults dark: styles to the OS preference (media query).
+   The app toggles a .dark class instead, so bind the variant to the class —
+   without this, the Light/Dark buttons don't actually change anything. */
+@custom-variant dark (&:where(.dark, .dark *));
+
 @theme {
   --font-sans: "Nunito", ui-sans-serif, system-ui, sans-serif;
   --font-display: "Baloo 2", "Nunito", sans-serif;

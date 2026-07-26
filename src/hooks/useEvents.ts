@@ -1,7 +1,19 @@
 import { useCallback, useEffect, useState } from "react";
 import { EventItem, EventCategory } from "../types";
-import { SEED_VENUE_AREAS } from "../lib/constants";
+import { SEED_VENUE_AREAS, ALL_CATEGORY_IDS } from "../lib/constants";
 import { rollStartForward, hostOf, normalizeUrl } from "../lib/events";
+
+// Drop events cached from the app's NYC era (old categories/areas/providers).
+// They live in localStorage on devices that used the old app and would
+// otherwise be merged back in forever.
+const LEGACY_AREA = /(new york|manhattan|brooklyn|queens|bronx|staten)/i;
+function isLegacyEvent(e: any): boolean {
+  if (!e) return true;
+  if (!(ALL_CATEGORY_IDS as string[]).includes(e.cat)) return true;
+  if (LEGACY_AREA.test(`${e.area || ""} ${e.venue || ""}`)) return true;
+  if (e.provider === "NYC Open Data") return true;
+  return false;
+}
 
 // Shared events are produced by the scheduled scraper (GitHub Actions) and
 // published to the `data` branch as events.json. Override with VITE_EVENTS_URL.
@@ -22,7 +34,9 @@ export function useEvents() {
     if (saved) {
       try {
         const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed)) return parsed.filter((e) => !String(e?.id).startsWith("seed_"));
+        if (Array.isArray(parsed)) {
+          return parsed.filter((e) => !String(e?.id).startsWith("seed_") && !isLegacyEvent(e));
+        }
       } catch (_) {}
     }
     return [];
@@ -156,7 +170,9 @@ export function useEvents() {
         area: SEED_VENUE_AREAS[data.venue.trim()] || "Contra Costa",
         cat: data.cat,
         price: data.price.trim() || "Check site",
-        start: `${data.date}T${data.time || "19:00"}:00Z`,
+        // The picker gives local wall time — store the real instant, not a
+        // fake-UTC string (which displayed hours off).
+        start: new Date(`${data.date}T${data.time || "10:00"}:00`).toISOString(),
         desc: data.desc.trim(),
         ticketUrl: ticket,
         image: "",
