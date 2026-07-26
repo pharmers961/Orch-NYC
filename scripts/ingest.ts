@@ -17,12 +17,13 @@
 import { writeFileSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
-import { fetchWithRetry, extractJsonLdEvents, geminiExtractEventsFromUrl, categorizeEvent, isKidAppropriate, PRICE_FALLBACK, laWallToUtc, parseIcs, parseIcsDateValue } from "../serverLib";
-import { platformExtract, ScrapeContext } from "./scrapers";
+import { fetchWithRetry, extractJsonLdEvents, geminiExtractEventsFromUrl, categorizeEvent, isKidAppropriate, parseAges, PRICE_FALLBACK, laWallToUtc, parseIcs, parseIcsDateValue } from "../serverLib";
+import { platformExtract, harvestEventObjects, ScrapeContext } from "./scrapers";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, "..");
 const OUT_FILE = path.join(ROOT, "events.json");
+const ICS_FILE = path.join(ROOT, "sproutscout.ics");
 
 function readJsonConfig(file: string, key: string): any[] {
   try {
@@ -132,6 +133,7 @@ function normalizeEvent(raw: any, sourceUrl: string, provider: string, sourceHos
   const start = `${dateStr}T${raw.time || "10:00"}:00Z`;
   const startTs = new Date(start).getTime();
   const title = (raw.title || "Untitled Event").toString().trim();
+  const rawAges = typeof raw.ages === "string" && /^(\d{1,2}-\d{1,2}|all)$/.test(raw.ages.trim()) ? raw.ages.trim() : "";
   return {
     id: dedupeKey(title, dateStr),
     title,
@@ -139,6 +141,7 @@ function normalizeEvent(raw: any, sourceUrl: string, provider: string, sourceHos
     venue: raw.venue || "East Bay Venue",
     area: raw.area || "Contra Costa",
     cat,
+    ages: rawAges || parseAges(`${title} ${raw.description || raw.desc || ""}`),
     price: raw.price || PRICE_FALLBACK,
     start,
     startTs: isNaN(startTs) ? Date.now() : startTs,
@@ -396,11 +399,15 @@ async function extractFromUrl(url: string, geminiKey?: string): Promise<any[]> {
 }
 
 // SerpApi Google Events engine — structured local family-event results.
-// Note: SerpApi's free tier is ~100 searches/month; the workflow runs twice a
-// day (~60 calls/month for one query), which fits.
+// Rotates through the coverage-area cities one query per run (~60 calls/month
+// at 2 runs/day, within the ~100/month free tier) so every city gets swept.
+const SERP_CITIES = ["Walnut Creek", "Concord", "Pleasant Hill", "Danville", "San Ramon", "Lafayette", "Martinez"];
+
 async function fetchSerpApi(key: string): Promise<any[]> {
   const year = new Date().getFullYear();
-  const url = `https://serpapi.com/search.json?engine=google_events&q=${encodeURIComponent("kids and family events near Walnut Creek CA")}&hl=en&gl=us&api_key=${key}`;
+  const city = SERP_CITIES[Math.floor(Date.now() / 43200000) % SERP_CITIES.length];
+  console.log(`SerpApi query city this run: ${city}`);
+  const url = `https://serpapi.com/search.json?engine=google_events&q=${encodeURIComponent(`kids and family events near ${city} CA`)}&hl=en&gl=us&api_key=${key}`;
   const res = await fetchWithRetry(url);
   if (!res.ok) throw new Error(`SerpApi HTTP ${res.status}`);
   const data: any = await res.json();
@@ -473,6 +480,34 @@ async function main() {
     }
   }
 
+  // 2b. BiblioCommons Events API (optional key, requested from the library).
+  // The richest storytime source when enabled; the SPA capture in
+  // scripts/scrapers.ts remains the keyless fallback.
+  const biblioKey = process.env.BIBLIOCOMMONS_API_KEY;
+  if (biblioKey) {
+    const label = "ccclib.bibliocommons.com";
+    const tryUrls = [
+      `https://api.bibliocommons.com/v2/libraries/ccclib/events?api_key=${biblioKey}&limit=100`,
+      `https://gateway.bibliocommons.com/v2/libraries/ccclib/events?api_key=${biblioKey}&limit=100`,
+    ];
+    for (const apiUrl of tryUrls) {
+      try {
+        const res = await fetchWithRetry(apiUrl, { headers: { Accept: "application/json" } });
+        if (!res.ok) continue;
+        const data = await res.json();
+        const rows = harvestEventObjects(data, "https://ccclib.bibliocommons.com/v2/events", { venue: "Contra Costa County Library" });
+        if (rows.length) {
+          rows.forEach((e) => all.push(normalizeEvent(e, e.ticketUrl, "City Feed", label)));
+          perSource[label] = (perSource[label] || 0) + rows.length;
+          console.log(`${label} (api): ${rows.length} events`);
+          break;
+        }
+      } catch (err) {
+        console.warn("BiblioCommons API failed:", (err as any)?.message);
+      }
+    }
+  }
+
   // 3. Ticketmaster Discovery (Family events near Walnut Creek).
   if (tmKey) {
     try {
@@ -538,6 +573,17 @@ async function main() {
     .forEach((e) => byId.set(e.id, e));
   const events = [...byId.values()].sort((a, b) => a.startTs - b.startTs);
 
+  // Backfill ages for events accumulated before the ages field existed.
+  events.forEach((e) => {
+    if (!e.ages) {
+      const a = parseAges(`${e.title} ${e.desc || ""}`);
+      if (a) e.ages = a;
+    }
+  });
+
+  // Weather tags for outdoor events in the next 16 days (Open-Meteo, no key).
+  await tagWeather(events);
+
   const payload = {
     generatedAt: new Date().toISOString(),
     count: events.length,
@@ -546,6 +592,91 @@ async function main() {
   };
   writeFileSync(OUT_FILE, JSON.stringify(payload, null, 2));
   console.log(`Wrote ${events.length} events to ${OUT_FILE}`);
+
+  writeFileSync(ICS_FILE, buildIcsFeed(events));
+  console.log(`Wrote subscribable calendar feed to ${ICS_FILE}`);
+}
+
+// ---- Weather (Open-Meteo, free/no key) -------------------------------------
+const OUTDOOR = /(park\b|plaza|farm|garden|outdoor|amphitheat|market|trail|hike|ranch|pool|splash|creek|grove|commons|zoo|fairground|lake|picnic|street|downtown|main st)/i;
+const WMO_SYM: [RegExp, string][] = [
+  [/^(0|1)$/, "☀️"], [/^(2|3)$/, "⛅"], [/^(45|48)$/, "🌫️"],
+  [/^(5[1-7]|6[1-7]|8[0-2])$/, "🌧️"], [/^(7[1-7]|8[5-6])$/, "❄️"], [/^9/, "⛈️"],
+];
+
+async function tagWeather(events: any[]): Promise<void> {
+  let daily: Record<string, { hi: number; pop: number; sym: string }> = {};
+  try {
+    const url = "https://api.open-meteo.com/v1/forecast?latitude=37.9101&longitude=-122.0652&daily=temperature_2m_max,precipitation_probability_max,weather_code&temperature_unit=fahrenheit&timezone=America%2FLos_Angeles&forecast_days=16";
+    const res = await fetchWithRetry(url);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data: any = await res.json();
+    (data?.daily?.time || []).forEach((date: string, i: number) => {
+      const code = String(data.daily.weather_code?.[i] ?? "");
+      daily[date] = {
+        hi: Math.round(data.daily.temperature_2m_max?.[i] ?? 0),
+        pop: Math.round(data.daily.precipitation_probability_max?.[i] ?? 0),
+        sym: WMO_SYM.find(([re]) => re.test(code))?.[1] || "☀️",
+      };
+    });
+  } catch (err) {
+    console.warn("Open-Meteo failed (skipping weather tags):", (err as any)?.message);
+    return;
+  }
+  let tagged = 0;
+  for (const e of events) {
+    const w = daily[String(e.start || "").split("T")[0]];
+    // Refresh on every run: clear stale tags, re-tag what's in the window now.
+    delete e.weather;
+    if (w && OUTDOOR.test(`${e.venue} ${e.title} ${e.desc || ""}`)) {
+      e.weather = w;
+      tagged++;
+    }
+  }
+  console.log(`Weather-tagged ${tagged} outdoor events`);
+}
+
+// ---- Subscribable ICS feed ---------------------------------------------------
+// Published alongside events.json so the family can subscribe once in
+// Google/Apple Calendar and every event lands on their phones automatically.
+const CAT_EMOJI: Record<string, string> = {
+  storytime: "📚", crafts: "🎨", music: "🎶", shows: "🎭",
+  nature: "🦋", play: "🤸", festivals: "🎪", other: "✨",
+};
+
+function icsEscape(s: string): string {
+  return (s || "").replace(/\\/g, "\\\\").replace(/;/g, "\\;").replace(/,/g, "\\,").replace(/\r?\n/g, "\\n");
+}
+
+function buildIcsFeed(events: any[]): string {
+  const stamp = new Date().toISOString().replace(/[-:]/g, "").split(".")[0] + "Z";
+  const lines = [
+    "BEGIN:VCALENDAR",
+    "VERSION:2.0",
+    "PRODID:-//SproutScout//Feed//EN",
+    "X-WR-CALNAME:Sprout Scout — East Bay Kids",
+    "X-WR-TIMEZONE:America/Los_Angeles",
+  ];
+  for (const e of events.slice(0, 600)) {
+    const start = new Date(e.start);
+    if (isNaN(start.getTime())) continue;
+    const end = new Date(start.getTime() + 90 * 60 * 1000);
+    const fmt = (d: Date) => d.toISOString().replace(/[-:]/g, "").split(".")[0] + "Z";
+    lines.push(
+      "BEGIN:VEVENT",
+      `UID:${e.id}@sproutscout.app`,
+      `DTSTAMP:${stamp}`,
+      `DTSTART:${fmt(start)}`,
+      `DTEND:${fmt(end)}`,
+      `SUMMARY:${icsEscape(`${CAT_EMOJI[e.cat] || "✨"} ${e.title}`)}`,
+      `LOCATION:${icsEscape(`${e.venue}, ${e.area}`)}`,
+      `DESCRIPTION:${icsEscape(`${e.desc || ""}${e.ages ? ` (Ages ${e.ages})` : ""} ${e.ticketUrl || ""}`.trim())}`,
+      `URL:${e.ticketUrl || ""}`,
+      "END:VEVENT"
+    );
+  }
+  lines.push("END:VCALENDAR");
+  return lines.join("\r\n");
 }
 
 main().catch((err) => {

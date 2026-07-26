@@ -113,6 +113,27 @@ export function categorizeEvent(title: string, description: string, venue = ""):
   return "other";
 }
 
+// Best-effort age-range extraction from event text. Returns "lo-hi", "all",
+// or "" when nothing age-like is stated.
+export function parseAges(text: string): string {
+  const t = (text || "").toLowerCase();
+  let m = /ages?\s*(\d{1,2})\s*(?:[-–—]|to|through)\s*(\d{1,2})/.exec(t);
+  if (m) return `${m[1]}-${m[2]}`;
+  m = /ages?\s*(\d{1,2})\s*(?:\+|and (?:up|older|above))/.exec(t);
+  if (m) return `${m[1]}-17`;
+  m = /(?:under|younger than)\s+(\d{1,2})\b/.exec(t);
+  if (m) return `0-${Math.max(0, +m[1] - 1)}`;
+  m = /\bages?\s+(\d{1,2})\b/.exec(t);
+  if (m) return `${m[1]}-${m[1]}`;
+  if (/(babies|\bbaby\b|infant|lap ?sit)/.test(t)) return "0-1";
+  if (/toddler/.test(t)) return "1-3";
+  if (/preschool/.test(t)) return "3-5";
+  if (/(school.age|elementary)/.test(t)) return "5-12";
+  if (/\bteens?\b/.test(t)) return "13-17";
+  if (/(all ages|whole family|everyone welcome)/.test(t)) return "all";
+  return "";
+}
+
 // Events that clearly aren't for young kids: adults-only signals, nightlife,
 // and alcohol-centric outings. Used to filter generic providers (Ticketmaster
 // Family classification is pre-filtered, but scrapes and search results aren't).
@@ -237,6 +258,7 @@ export const EVENT_JSON_SCHEMA_HINT = `Each event in the array MUST strictly fol
   "date": "YYYY-MM-DD",
   "time": "HH:MM 24h format, e.g. 10:30",
   "price": "e.g. Free, $10+ or $10-$25",
+  "ages": "Target age range if stated, e.g. 3-5, 0-2, all (else empty string)",
   "ticketUrl": "The direct page to register/learn about this event",
   "description": "Short 1-2 sentence description of the event, mentioning target ages if stated"
 }

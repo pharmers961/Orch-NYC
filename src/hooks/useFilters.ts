@@ -1,18 +1,36 @@
 import { useCallback, useMemo, useState } from "react";
 import { EventItem, EventCategory } from "../types";
-import { ALL_CATEGORY_IDS } from "../lib/constants";
+import { ALL_CATEGORY_IDS, AGE_BUCKETS } from "../lib/constants";
 import { getCity, parseLowestNumericPrice } from "../lib/events";
 
 export type DateFilter = "all" | "today" | "weekend" | "week" | "month" | "custom";
 export type SortBy = "soonest" | "lowestPrice" | "recentlyAdded" | "endingSoon";
-export type ViewMode = "list" | "calendar" | "plan";
+export type ViewMode = "list" | "calendar" | "map" | "plan";
+
+// True when the event's stated age range overlaps a selected bucket. Events
+// with no stated ages (or "all") always pass — most sources don't state ages,
+// so the filter removes clear mismatches rather than demanding matches.
+function agesMatch(eventAges: string | undefined, selected: string[]): boolean {
+  if (selected.length === 0) return true;
+  if (!eventAges || eventAges === "all") return true;
+  const m = /^(\d{1,2})-(\d{1,2})$/.exec(eventAges);
+  if (!m) return true;
+  const lo = +m[1];
+  const hi = +m[2];
+  return selected.some((id) => {
+    const b = AGE_BUCKETS.find((x) => x.id === id);
+    return b ? lo <= b.hi && hi >= b.lo : false;
+  });
+}
 
 export function useFilters(events: EventItem[], savedIds: string[], viewMode: ViewMode) {
   const [hiddenSources, setHiddenSources] = useState<string[]>([]);
   const [selectedVenues, setSelectedVenues] = useState<string[]>([]);
   const [selectedCategories, setSelectedCategories] = useState<EventCategory[]>(ALL_CATEGORY_IDS);
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
-  const [dateFilter, setDateFilter] = useState<DateFilter>("all");
+  // Parents plan weekends — land there by default.
+  const [dateFilter, setDateFilter] = useState<DateFilter>("weekend");
+  const [selectedAges, setSelectedAges] = useState<string[]>([]);
   const [customStart, setCustomStart] = useState("");
   const [customEnd, setCustomEnd] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
@@ -53,6 +71,7 @@ export function useFilters(events: EventItem[], savedIds: string[], viewMode: Vi
         if (hiddenSources.includes(e.source)) return false;
         if (selectedVenues.length > 0 && !selectedVenues.includes(e.venue)) return false;
         if (selectedCities.length > 0 && !selectedCities.includes(getCity(e.area, e.venue))) return false;
+        if (!agesMatch(e.ages, selectedAges)) return false;
 
         const isFree = /free/i.test(e.price) || parseLowestNumericPrice(e.price) === 0;
         if (freeOnly && !isFree) return false;
@@ -89,11 +108,15 @@ export function useFilters(events: EventItem[], savedIds: string[], viewMode: Vi
             endOfToday.setHours(23, 59, 59, 999);
             if (evDate < today || evDate > endOfToday) return false;
           } else if (dateFilter === "weekend") {
+            // "This weekend" = the upcoming Fri-Sun, still including today when
+            // it's already Saturday or Sunday (5-day offset alone would jump a
+            // Sunday visitor to NEXT weekend).
             const currentDay = today.getDay();
+            const friOffset = currentDay === 0 ? -2 : 5 - currentDay;
             const fri = new Date(today);
-            fri.setDate(today.getDate() + (5 - currentDay));
-            const sun = new Date(today);
-            sun.setDate(today.getDate() + (7 - currentDay));
+            fri.setDate(today.getDate() + friOffset);
+            const sun = new Date(fri);
+            sun.setDate(fri.getDate() + 2);
             sun.setHours(23, 59, 59, 999);
             if (evDate < fri || evDate > sun) return false;
           } else if (dateFilter === "week") {
@@ -136,7 +159,7 @@ export function useFilters(events: EventItem[], savedIds: string[], viewMode: Vi
         return 0;
       });
   }, [
-    events, selectedCategories, hiddenSources, selectedVenues, selectedCities, maxPrice, freeOnly,
+    events, selectedCategories, hiddenSources, selectedVenues, selectedCities, selectedAges, maxPrice, freeOnly,
     savedOnly, savedIds, searchQuery, dateFilter, customStart, customEnd, sortBy, selectedTags, viewMode,
   ]);
 
@@ -160,9 +183,10 @@ export function useFilters(events: EventItem[], savedIds: string[], viewMode: Vi
     setHiddenSources([]);
     setSelectedVenues([]);
     setSelectedCities([]);
+    setSelectedAges([]);
     setMaxPrice(0);
     setFreeOnly(false);
-    setDateFilter("all");
+    setDateFilter("weekend");
     setCustomStart("");
     setCustomEnd("");
     setSearchQuery("");
@@ -175,9 +199,10 @@ export function useFilters(events: EventItem[], savedIds: string[], viewMode: Vi
     hiddenSources.length > 0 ||
     selectedVenues.length > 0 ||
     selectedCities.length > 0 ||
+    selectedAges.length > 0 ||
     maxPrice > 0 ||
     freeOnly ||
-    dateFilter !== "all" ||
+    dateFilter !== "weekend" ||
     searchQuery.trim() !== "" ||
     savedOnly ||
     selectedTags.length > 0;
@@ -195,6 +220,7 @@ export function useFilters(events: EventItem[], savedIds: string[], viewMode: Vi
     sortBy, setSortBy,
     savedOnly, setSavedOnly,
     selectedCities, setSelectedCities,
+    selectedAges, setSelectedAges,
     maxPrice, setMaxPrice,
     freeOnly, setFreeOnly,
     // derived

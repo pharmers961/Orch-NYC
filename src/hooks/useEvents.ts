@@ -110,6 +110,8 @@ export function useEvents() {
           venue: x.venue || "East Bay Venue",
           area: x.area || "Contra Costa",
           cat: x.cat || "other",
+          ages: typeof x.ages === "string" ? x.ages : "",
+          weather: x.weather && typeof x.weather.hi === "number" ? x.weather : undefined,
           price: x.price || "Check site",
           start: rollStartForward(x.start),
           desc: x.desc || x.description || "",

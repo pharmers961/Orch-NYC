@@ -23,6 +23,15 @@ GitHub Actions cron (2x daily)
 
 Every extracted event passes a kid-appropriateness filter (no 21+/nightlife/wine-walk noise) and a civic-noise filter (no city council meetings), then gets categorized: 📚 Storytime, 🎨 Crafts, 🎶 Music, 🎭 Shows, 🦋 Nature, 🤸 Play, 🎪 Festivals.
 
+## Subscribe on your phone
+
+The scraper publishes a live calendar feed at
+`https://raw.githubusercontent.com/pharmers961/Orch-NYC/data/sproutscout.ics`.
+Use the **Subscribe** button in the app, or add that URL in Google Calendar
+("Other calendars → From URL") or Apple Calendar ("File → New Calendar
+Subscription"). Every event then lands on your phone automatically, refreshed
+twice a day.
+
 ## Run locally
 
 **Prerequisites:** Node.js 20+
@@ -37,7 +46,8 @@ Every extracted event passes a kid-appropriateness filter (no 21+/nightlife/wine
 | --- | --- |
 | `TICKETMASTER_KEY` | Family-classified ticketed shows near Walnut Creek (free key from developer.ticketmaster.com) |
 | `GEMINI_API_KEY` | AI extraction for event pages without structured data |
-| `SERPAPI_KEY` | Google Events results (free tier ~100 searches/month) |
+| `SERPAPI_KEY` | Google Events results (free tier ~100 searches/month; queries rotate through the coverage cities) |
+| `BIBLIOCOMMONS_API_KEY` | Full library events API — request a free Events API key from Contra Costa County Library / BiblioCommons support; until then the library SPA is scraped best-effort |
 
 All are optional — without them the feed still fills from recurring schedules, iCal feeds, and schema.org markup.
 

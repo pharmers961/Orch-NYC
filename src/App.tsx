@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { Sparkles, AlertCircle } from "lucide-react";
-import { EventCategory } from "./types";
-import { CATEGORIES, ALL_CATEGORY_IDS } from "./lib/constants";
-import { localDateKey, downloadMultiICS } from "./lib/events";
+import { EventCategory, EventItem } from "./types";
+import { CATEGORIES, ALL_CATEGORY_IDS, FEED_ICS_URL } from "./lib/constants";
+import { localDateKey, downloadMultiICS, getCategoryEmoji } from "./lib/events";
 import { useTheme } from "./hooks/useTheme";
 import { useEvents } from "./hooks/useEvents";
 import { useFilters, ViewMode, SortBy } from "./hooks/useFilters";
@@ -19,6 +19,20 @@ import { PlanView } from "./components/PlanView";
 import { EventModal } from "./components/EventModal";
 import { DayAgendaPopover } from "./components/DayAgendaPopover";
 import { ManualEventModal } from "./components/ManualEventModal";
+import { MapView } from "./components/MapView";
+
+// Cadence label for a recurring series ("Every Saturday", "Monthly", …).
+function cadenceLabel(evs: EventItem[]): string {
+  const days = evs.map((e) => new Date(e.start));
+  const sameDow = days.every((d) => d.getDay() === days[0].getDay());
+  const gaps: number[] = [];
+  for (let i = 1; i < days.length; i++) gaps.push((+days[i] - +days[i - 1]) / 86400000);
+  const wd = days[0].toLocaleDateString("en-US", { weekday: "long" });
+  if (sameDow && gaps.every((g) => g >= 6 && g <= 8)) return `Every ${wd}`;
+  if (sameDow && gaps.every((g) => g >= 13 && g <= 15)) return `Every other ${wd}`;
+  if (gaps.every((g) => g >= 26 && g <= 35)) return "Monthly";
+  return `${evs.length} dates`;
+}
 
 export default function App() {
   const { theme, cycleTheme } = useTheme();
@@ -61,7 +75,7 @@ export default function App() {
     const params = new URLSearchParams();
     if (viewMode !== "list") params.set("view", viewMode);
     if (filters.sortBy !== "soonest") params.set("sort", filters.sortBy);
-    if (filters.dateFilter !== "all") params.set("when", filters.dateFilter);
+    if (filters.dateFilter !== "weekend") params.set("when", filters.dateFilter);
     if (filters.savedOnly) params.set("saved", "1");
     if (filters.searchQuery.trim()) params.set("q", filters.searchQuery.trim());
     if (filters.selectedCities.length) params.set("cities", filters.selectedCities.join(","));
@@ -73,7 +87,7 @@ export default function App() {
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const v = params.get("view");
-    if (v === "calendar" || v === "plan" || v === "list") setViewMode(v);
+    if (v === "calendar" || v === "plan" || v === "list" || v === "map") setViewMode(v);
     const s = params.get("sort");
     if (s === "endingSoon" || s === "lowestPrice" || s === "recentlyAdded" || s === "soonest") filters.setSortBy(s as SortBy);
     const w = params.get("when");
@@ -98,6 +112,52 @@ export default function App() {
 
   const savedEvents = useMemo(() => events.filter((e) => savedIds.includes(e.id)), [events, savedIds]);
   const activeEvent = useMemo(() => events.find((e) => e.id === selectedEventId) || null, [events, selectedEventId]);
+
+  // Today strip: everything happening today (that hasn't long ended), shown
+  // above the list regardless of the active date filter.
+  const todayEvents = useMemo(() => {
+    const key = localDateKey(new Date());
+    const cutoff = Date.now() - 2 * 3600 * 1000;
+    return events
+      .filter((e) => localDateKey(new Date(e.start)) === key && new Date(e.start).getTime() >= cutoff)
+      .sort((a, b) => new Date(a.start).getTime() - new Date(b.start).getTime())
+      .slice(0, 15);
+  }, [events]);
+
+  // Collapse recurring series (3+ occurrences of the same title+venue) into
+  // one card fronted by the next date, with the rest expandable.
+  const listEntries = useMemo(() => {
+    const norm = (s: string) => (s || "").toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 28);
+    const keyOf = (e: EventItem) => `${norm(e.title)}|${norm(e.venue)}`;
+    const groups = new Map<string, EventItem[]>();
+    filters.filteredEventsList.forEach((e) => {
+      const k = keyOf(e);
+      if (!groups.has(k)) groups.set(k, []);
+      groups.get(k)!.push(e);
+    });
+    const rendered: { item: EventItem; series?: { label: string; events: EventItem[] } }[] = [];
+    const seen = new Set<string>();
+    filters.filteredEventsList.forEach((e) => {
+      const k = keyOf(e);
+      const g = groups.get(k)!;
+      if (g.length < 3) {
+        rendered.push({ item: e });
+        return;
+      }
+      if (seen.has(k)) return;
+      seen.add(k);
+      const sorted = [...g].sort((a, b) => new Date(a.start).getTime() - new Date(b.start).getTime());
+      rendered.push({ item: sorted[0], series: { label: cadenceLabel(sorted), events: sorted.slice(1) } });
+    });
+    return rendered;
+  }, [filters.filteredEventsList]);
+
+  const handleSubscribe = () => {
+    navigator.clipboard?.writeText(FEED_ICS_URL).catch(() => {});
+    const webcal = FEED_ICS_URL.replace(/^https?:\/\//, "webcal://");
+    window.open(`https://calendar.google.com/calendar/render?cid=${encodeURIComponent(webcal)}`, "_blank", "noopener");
+    setApiSuccessNote("Feed URL copied! Google Calendar opened — or paste the URL into any calendar app's “Add by URL”.");
+  };
 
   const onToggleCategory = (cat: EventCategory) =>
     filters.setSelectedCategories((prev) => (prev.includes(cat) ? prev.filter((c) => c !== cat) : [...prev, cat]));
@@ -134,6 +194,7 @@ export default function App() {
           searchQuery={filters.searchQuery} setSearchQuery={filters.setSearchQuery}
           sortBy={filters.sortBy} setSortBy={filters.setSortBy}
           onBulkExport={() => handleBulkExport(filters.filteredEventsList, "sprout-scout-events.ics")}
+          onSubscribe={handleSubscribe}
           viewMode={viewMode} setViewMode={setViewMode}
         />
 
@@ -147,6 +208,8 @@ export default function App() {
           onToggleCategory={onToggleCategory}
           selectedCities={filters.selectedCities}
           setSelectedCities={filters.setSelectedCities}
+          selectedAges={filters.selectedAges}
+          setSelectedAges={filters.setSelectedAges}
           freeOnly={filters.freeOnly}
           setFreeOnly={filters.setFreeOnly}
           maxPrice={filters.maxPrice}
@@ -169,6 +232,34 @@ export default function App() {
         />
 
         <main className="space-y-6 min-w-0">
+          {viewMode === "list" && todayEvents.length > 0 && (
+            <div className="space-y-2">
+              <h2 className="text-[10px] font-bold uppercase tracking-widest text-slate-400 dark:text-zinc-500">
+                🌞 Happening today
+              </h2>
+              <div className="flex gap-2 overflow-x-auto pb-2 -mx-1 px-1 snap-x">
+                {todayEvents.map((e) => (
+                  <button
+                    key={e.id}
+                    onClick={() => setSelectedEventId(e.id)}
+                    className="shrink-0 w-44 snap-start text-left p-3 rounded-xl bg-white dark:bg-zinc-950 border border-slate-200/60 dark:border-zinc-800 hover:border-emerald-400 hover:shadow-md transition-all"
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="text-xl leading-none">{getCategoryEmoji(e.cat)}</span>
+                      {/free/i.test(e.price) && (
+                        <span className="text-[9px] font-bold px-1.5 py-0.5 rounded-full bg-emerald-500 text-white uppercase">Free</span>
+                      )}
+                    </div>
+                    <div className="text-[11px] font-bold text-slate-800 dark:text-zinc-200 truncate mt-1.5">{e.title}</div>
+                    <div className="text-[10px] text-slate-500 dark:text-zinc-500 truncate">
+                      {new Date(e.start).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })} · {e.venue}
+                    </div>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
           {events.length === 0 && !loading && (
             <div className="p-8 sm:p-12 rounded-2xl bg-white/60 dark:bg-zinc-950/60 backdrop-blur-sm border border-slate-200/60 dark:border-zinc-800 text-center">
               <Sparkles size={32} className="text-indigo-500 mx-auto mb-4" />
@@ -214,7 +305,7 @@ export default function App() {
 
           {viewMode === "list" && filters.filteredEventsList.length > 0 && (
             <div className="space-y-4">
-              {filters.filteredEventsList.map((item) => (
+              {listEntries.map(({ item, series }) => (
                 <EventCard
                   key={item.id}
                   item={item}
@@ -223,9 +314,15 @@ export default function App() {
                   onToggleSave={() => toggleSave(item.id)}
                   onIsolateSource={() => filters.isolateSource(item.source)}
                   customVenueColors={customVenueColors}
+                  series={series}
+                  onSelectSibling={(id) => setSelectedEventId(id)}
                 />
               ))}
             </div>
+          )}
+
+          {viewMode === "map" && (
+            <MapView events={filters.filteredEventsList} onSelectEvent={(id) => setSelectedEventId(id)} />
           )}
 
           {viewMode === "calendar" && events.length > 0 && (
