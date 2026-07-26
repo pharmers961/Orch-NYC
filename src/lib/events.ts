@@ -67,6 +67,7 @@ export function providerMeta(ev: EventItem): { label: string; tone: ProviderTone
     case "Ticketmaster":
     case "City Feed":
     case "Recurring":
+    case "Scraper":
       return { label: "Official", tone: "official" };
     case "Manual":
       return { label: "Added by you", tone: "manual" };

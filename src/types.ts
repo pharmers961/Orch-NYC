@@ -28,7 +28,7 @@ export interface EventItem {
   image: string;
   status?: string; // e.g. 'onsale', 'cancelled', 'offsale', etc.
   source: string; // Source portal or site URL (e.g., Ticketmaster, ccclib.org, lesherartscenter.org)
-  provider: "Ticketmaster" | "Gemini" | "SerpApi" | "Manual" | "City Feed" | "Recurring";
+  provider: "Ticketmaster" | "Gemini" | "SerpApi" | "Manual" | "City Feed" | "Recurring" | "Scraper";
   added: number; // timestamp
   tags?: string[]; // Optional user/parsing tags
 }

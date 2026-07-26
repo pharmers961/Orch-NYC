@@ -33,6 +33,63 @@ export async function fetchWithRetry(url: string, options: any = {}, retries = 2
 // Shared fallback shown when no price could be determined.
 export const PRICE_FALLBACK = "Check site";
 
+// ---- Pacific-time helpers ------------------------------------------------
+// Convert an America/Los_Angeles wall time to the corresponding UTC instant
+// (handles DST via Intl, fixed-point iteration).
+export function laWallToUtc(y: number, mo: number, d: number, hh: number, mm: number): Date {
+  const target = Date.UTC(y, mo - 1, d, hh, mm);
+  let guess = target;
+  for (let i = 0; i < 3; i++) {
+    const dtf = new Intl.DateTimeFormat("en-US", {
+      timeZone: "America/Los_Angeles",
+      year: "numeric", month: "2-digit", day: "2-digit",
+      hour: "2-digit", minute: "2-digit", hourCycle: "h23",
+    });
+    const parts: Record<string, string> = {};
+    dtf.formatToParts(new Date(guess)).forEach((p) => (parts[p.type] = p.value));
+    const seen = Date.UTC(+parts.year, +parts.month - 1, +parts.day, +parts.hour, +parts.minute);
+    const diff = target - seen;
+    if (diff === 0) break;
+    guess += diff;
+  }
+  return new Date(guess);
+}
+
+// ---- ICS parsing ----------------------------------------------------------
+// Minimal ICS parser: unfold lines, walk VEVENT blocks, read the fields we use.
+export function parseIcsDateValue(value: string): { date: string; time: string } | null {
+  let m = /^(\d{4})(\d{2})(\d{2})$/.exec(value);
+  if (m) return { date: `${m[1]}-${m[2]}-${m[3]}`, time: "10:00" }; // all-day
+  m = /^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})?(Z)?$/.exec(value);
+  if (!m) return null;
+  const iso = m[7]
+    ? new Date(Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +(m[6] || "0"))).toISOString()
+    : laWallToUtc(+m[1], +m[2], +m[3], +m[4], +m[5]).toISOString(); // floating/TZID -> Pacific
+  return { date: iso.split("T")[0], time: iso.slice(11, 16) };
+}
+
+export function parseIcs(text: string): { summary: string; dtstart: string; description: string; location: string; url: string }[] {
+  const lines = text.replace(/\r\n[ \t]/g, "").replace(/\n[ \t]/g, "").split(/\r?\n/);
+  const events: any[] = [];
+  let cur: any = null;
+  for (const line of lines) {
+    if (line === "BEGIN:VEVENT") { cur = { summary: "", dtstart: "", description: "", location: "", url: "" }; continue; }
+    if (line === "END:VEVENT") { if (cur) events.push(cur); cur = null; continue; }
+    if (!cur) continue;
+    const idx = line.indexOf(":");
+    if (idx < 0) continue;
+    const [nameAndParams, value] = [line.slice(0, idx), line.slice(idx + 1)];
+    const name = nameAndParams.split(";")[0].toUpperCase();
+    const unescape = (v: string) => v.replace(/\\n/g, " ").replace(/\\,/g, ",").replace(/\\;/g, ";").trim();
+    if (name === "SUMMARY") cur.summary = unescape(value);
+    else if (name === "DTSTART") cur.dtstart = value.trim();
+    else if (name === "DESCRIPTION") cur.description = unescape(value).replace(/<[^>]+>/g, "").slice(0, 400);
+    else if (name === "LOCATION") cur.location = unescape(value);
+    else if (name === "URL") cur.url = value.trim();
+  }
+  return events;
+}
+
 // Best-effort categorization for a kids/family calendar. Keyword rules run
 // first (most specific category to most general), then the venue provides a
 // fallback for reliably single-genre venues (libraries, craft stores, farms).
