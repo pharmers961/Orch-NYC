@@ -93,6 +93,7 @@ export function getCity(area: string, venue: string): string {
   if (/(san ramon|bishop ranch|dougherty|forest home farms)/.test(hay)) return "San Ramon";
   if (/martinez/.test(hay)) return "Martinez";
   if (/clayton/.test(hay)) return "Clayton";
+  if (/(oakland|berkeley|emeryville|fairyland|oakland zoo|lawrence hall|chabot|brentwood|antioch|fairground|day trip)/.test(hay)) return "Day Trip";
   return "Other";
 }
 

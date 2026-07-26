@@ -1,4 +1,4 @@
-import { Search, Heart, X, CalendarPlus, List as ListIcon, Calendar } from "lucide-react";
+import { Search, Heart, X, CalendarPlus, CalendarCheck, List as ListIcon, Calendar, Map as MapIcon } from "lucide-react";
 import { DateFilter, SortBy, ViewMode } from "../hooks/useFilters";
 
 const DATE_CHIPS: { id: DateFilter; label: string }[] = [
@@ -18,6 +18,7 @@ export function Toolbar({
   searchQuery, setSearchQuery,
   sortBy, setSortBy,
   onBulkExport,
+  onSubscribe,
   viewMode, setViewMode,
 }: {
   dateFilter: DateFilter; setDateFilter: (d: DateFilter) => void;
@@ -27,6 +28,7 @@ export function Toolbar({
   searchQuery: string; setSearchQuery: (s: string) => void;
   sortBy: SortBy; setSortBy: (s: SortBy) => void;
   onBulkExport: () => void;
+  onSubscribe: () => void;
   viewMode: ViewMode; setViewMode: (v: ViewMode) => void;
 }) {
   const chipCls = (active: boolean) =>
@@ -100,7 +102,7 @@ export function Toolbar({
             type="text"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="Search artists, sports, venues..."
+            placeholder="Search storytimes, parks, crafts..."
             aria-label="Search events"
             className="w-full sm:w-60 pl-8 pr-7 py-2 bg-white/60 dark:bg-zinc-950/60 border border-slate-200 dark:border-zinc-800 rounded-full text-xs focus:outline-none focus:ring-1 focus:ring-slate-500 dark:focus:ring-zinc-500"
           />
@@ -137,6 +139,15 @@ export function Toolbar({
           <CalendarPlus size={14} />
         </button>
 
+        <button
+          onClick={onSubscribe}
+          className="px-3 py-1.5 rounded-full bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold flex items-center gap-1.5 transition-all shadow-sm"
+          title="Subscribe in Google/Apple Calendar — new events appear automatically"
+        >
+          <CalendarCheck size={13} />
+          <span className="hidden md:inline">Subscribe</span>
+        </button>
+
         <div className="flex items-center rounded-lg border border-slate-200 dark:border-zinc-800 p-0.5 bg-slate-100 dark:bg-zinc-900">
           <button
             onClick={() => setViewMode("list")}
@@ -153,6 +164,14 @@ export function Toolbar({
             aria-label="Calendar view"
           >
             <Calendar size={14} />
+          </button>
+          <button
+            onClick={() => setViewMode("map")}
+            className={`p-1.5 rounded-md transition-all ${viewMode === "map" ? "bg-white dark:bg-zinc-800 text-slate-900 dark:text-white" : "text-slate-500"}`}
+            title="Map View"
+            aria-label="Map view"
+          >
+            <MapIcon size={14} />
           </button>
           <button
             onClick={() => setViewMode("plan")}

@@ -4,7 +4,8 @@ export type Theme = "light" | "dark" | "system";
 
 export function useTheme() {
   const [theme, setTheme] = useState<Theme>(() => {
-    return (localStorage.getItem("marquee_theme") as Theme) || "system";
+    // Default to light — friendlier daytime look for a kids' calendar.
+    return (localStorage.getItem("marquee_theme") as Theme) || "light";
   });
 
   useEffect(() => {

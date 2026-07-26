@@ -1,7 +1,7 @@
 import React, { useState } from "react";
 import { X } from "lucide-react";
 import { EventItem, EventCategory } from "../types";
-import { CATEGORIES, CITIES } from "../lib/constants";
+import { CATEGORIES, CITIES, AGE_BUCKETS } from "../lib/constants";
 import { formatSourceLabel } from "../lib/events";
 
 function activate(fn: () => void) {
@@ -37,6 +37,8 @@ export function FiltersSidebar({
   onToggleCategory,
   selectedCities,
   setSelectedCities,
+  selectedAges,
+  setSelectedAges,
   freeOnly,
   setFreeOnly,
   maxPrice,
@@ -64,6 +66,8 @@ export function FiltersSidebar({
   onToggleCategory: (c: EventCategory) => void;
   selectedCities: string[];
   setSelectedCities: React.Dispatch<React.SetStateAction<string[]>>;
+  selectedAges: string[];
+  setSelectedAges: React.Dispatch<React.SetStateAction<string[]>>;
   freeOnly: boolean;
   setFreeOnly: (b: boolean) => void;
   maxPrice: number;
@@ -102,31 +106,61 @@ export function FiltersSidebar({
         </button>
       </div>
 
-      {/* Categories */}
+      {/* Categories — big friendly emoji chips */}
       <div className="space-y-3">
-        <h3 className="text-[10px] font-bold text-slate-400 dark:text-zinc-500 uppercase tracking-widest">Categories</h3>
-        <div className="space-y-2">
-          {CATEGORIES.map((cat) => (
-            <label
-              key={cat.id}
-              className="flex items-center justify-between text-xs group cursor-pointer text-slate-700 dark:text-zinc-300 hover:text-slate-900 dark:hover:text-white"
-            >
-              <div className="flex items-center gap-2">
-                <input
-                  type="checkbox"
-                  checked={selectedCategories.includes(cat.id)}
-                  onChange={() => onToggleCategory(cat.id)}
-                  className="w-4 h-4 rounded border-slate-300 dark:border-zinc-700 text-indigo-600 focus:ring-indigo-500"
-                  style={{ accentColor: cat.color }}
-                />
-                <span>{cat.emoji} {cat.label}</span>
-              </div>
-              <span className="text-[10px] bg-slate-200/50 dark:bg-zinc-800 px-2 py-0.5 rounded-full font-semibold">
-                {catCounts[cat.id] || 0}
-              </span>
-            </label>
-          ))}
+        <h3 className="text-[10px] font-bold text-slate-400 dark:text-zinc-500 uppercase tracking-widest">What kind of fun?</h3>
+        <div className="grid grid-cols-2 gap-1.5">
+          {CATEGORIES.map((cat) => {
+            const active = selectedCategories.includes(cat.id);
+            return (
+              <button
+                key={cat.id}
+                onClick={() => onToggleCategory(cat.id)}
+                className={`flex items-center gap-1.5 px-2 py-2 rounded-xl text-[11px] font-semibold border transition-all text-left ${
+                  active
+                    ? "shadow-sm"
+                    : "opacity-45 grayscale bg-white dark:bg-zinc-950 border-slate-200 dark:border-zinc-800"
+                }`}
+                style={active ? { backgroundColor: `${cat.color}1A`, borderColor: `${cat.color}66`, color: cat.color } : undefined}
+                aria-pressed={active}
+              >
+                <span className="text-lg leading-none">{cat.emoji}</span>
+                <span className="min-w-0 flex-1 truncate text-slate-700 dark:text-zinc-300">{cat.label.split(" & ")[0]}</span>
+                <span className="text-[9px] font-bold opacity-70">{catCounts[cat.id] || 0}</span>
+              </button>
+            );
+          })}
         </div>
+      </div>
+
+      {/* Ages */}
+      <div className="space-y-3 pt-2">
+        <div className="flex items-center justify-between">
+          <h3 className="text-[10px] font-bold text-slate-400 dark:text-zinc-500 uppercase tracking-widest">Ages</h3>
+          {selectedAges.length > 0 && (
+            <button onClick={() => setSelectedAges([])} className="text-[10px] text-emerald-600 font-semibold hover:underline">Clear</button>
+          )}
+        </div>
+        <div className="flex flex-wrap gap-1.5">
+          {AGE_BUCKETS.map((b) => {
+            const active = selectedAges.includes(b.id);
+            return (
+              <button
+                key={b.id}
+                onClick={() => setSelectedAges((prev) => (prev.includes(b.id) ? prev.filter((x) => x !== b.id) : [...prev, b.id]))}
+                className={`px-3 py-1.5 rounded-full text-[11px] font-bold border transition-all ${
+                  active
+                    ? "bg-sky-500 text-white border-sky-500"
+                    : "bg-white dark:bg-zinc-900 border-slate-200 dark:border-zinc-800 text-slate-600 dark:text-zinc-400 hover:border-sky-400"
+                }`}
+                aria-pressed={active}
+              >
+                {b.label} yrs
+              </button>
+            );
+          })}
+        </div>
+        <p className="text-[9px] text-slate-400 dark:text-zinc-600">Events that don't state an age range are always shown.</p>
       </div>
 
       {/* City */}

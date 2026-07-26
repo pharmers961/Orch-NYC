@@ -1,5 +1,5 @@
-import React from "react";
-import { Heart, MapPin } from "lucide-react";
+import React, { useState } from "react";
+import { Heart, MapPin, Repeat } from "lucide-react";
 import { EventItem } from "../types";
 import {
   getCategoryColor, getCategoryEmoji, getEventImage, resolveTicketTarget,
@@ -29,6 +29,8 @@ export function EventCard({
   onToggleSave,
   onIsolateSource,
   customVenueColors,
+  series,
+  onSelectSibling,
 }: {
   item: EventItem;
   isSaved: boolean;
@@ -36,7 +38,11 @@ export function EventCard({
   onToggleSave: () => void;
   onIsolateSource: () => void;
   customVenueColors: Record<string, string>;
+  // When this card fronts a recurring series: cadence label + the other dates.
+  series?: { label: string; events: EventItem[] };
+  onSelectSibling?: (id: string) => void;
 }) {
+  const [datesOpen, setDatesOpen] = useState(false);
   const eventStartDate = new Date(item.start);
   const dayLabel = eventStartDate.getDate();
   const monthLabel = eventStartDate.toLocaleDateString("en-US", { month: "short" });
@@ -82,6 +88,31 @@ export function EventCard({
           <span className="text-[10px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wider" style={{ backgroundColor: `${getCategoryColor(item.cat)}1A`, color: getCategoryColor(item.cat) }}>
             {catLabel}
           </span>
+          {/free/i.test(item.price) && (
+            <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-500 text-white uppercase tracking-wide">Free</span>
+          )}
+          {item.ages && item.ages !== "all" && (
+            <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-sky-500/15 text-sky-600 dark:text-sky-400 tracking-wide">
+              Ages {item.ages}
+            </span>
+          )}
+          {item.weather && (
+            <span
+              className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-400/15 text-amber-600 dark:text-amber-400 tracking-wide"
+              title={`Outdoor event — forecast high ${item.weather.hi}°F, ${item.weather.pop}% chance of rain`}
+            >
+              {item.weather.sym} {item.weather.hi}°{item.weather.pop >= 30 ? ` · ${item.weather.pop}%🌧` : ""}
+            </span>
+          )}
+          {series && (
+            <button
+              onClick={(e) => { e.stopPropagation(); setDatesOpen(!datesOpen); }}
+              className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-violet-500/15 text-violet-600 dark:text-violet-400 tracking-wide flex items-center gap-1 hover:bg-violet-500/25"
+              title="Recurring event — tap to see all dates"
+            >
+              <Repeat size={9} /> {series.label} · +{series.events.length}
+            </button>
+          )}
           <ProvenanceBadge ev={item} />
           {item.status === "cancelled" && (
             <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-red-500/15 text-red-500 uppercase tracking-wide">Cancelled</span>
@@ -109,6 +140,26 @@ export function EventCard({
             </>
           )}
         </div>
+
+        {series && datesOpen && (
+          <div className="flex flex-wrap gap-1.5 pt-1" onClick={(e) => e.stopPropagation()}>
+            {series.events.slice(0, 8).map((sib) => {
+              const d = new Date(sib.start);
+              return (
+                <button
+                  key={sib.id}
+                  onClick={() => onSelectSibling?.(sib.id)}
+                  className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-slate-100 dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 text-slate-600 dark:text-zinc-400 hover:border-violet-400 hover:text-violet-600"
+                >
+                  {d.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" })}
+                </button>
+              );
+            })}
+            {series.events.length > 8 && (
+              <span className="text-[10px] text-slate-400 self-center">+{series.events.length - 8} more</span>
+            )}
+          </div>
+        )}
       </div>
 
       <div className="w-full sm:w-auto order-last flex sm:flex-col items-center sm:items-end justify-between gap-2 sm:pr-2 sm:shrink-0 mt-1 pt-3 sm:mt-0 sm:pt-0 border-t border-slate-100 dark:border-zinc-800/60 sm:border-0">
@@ -131,9 +182,9 @@ export function EventCard({
             target="_blank"
             rel="noopener noreferrer"
             onClick={(e) => e.stopPropagation()}
-            className="px-4 py-1.5 bg-indigo-600 text-white hover:bg-indigo-700 font-bold rounded-full text-xs transition-all shadow-sm"
+            className="px-4 py-1.5 bg-emerald-600 text-white hover:bg-emerald-700 font-bold rounded-full text-xs transition-all shadow-sm"
           >
-            Tickets
+            Details
           </a>
         </div>
 

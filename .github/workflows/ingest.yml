@@ -45,21 +45,24 @@ jobs:
           TICKETMASTER_KEY: ${{ secrets.TICKETMASTER_KEY }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           SERPAPI_KEY: ${{ secrets.SERPAPI_KEY }}
+          BIBLIOCOMMONS_API_KEY: ${{ secrets.BIBLIOCOMMONS_API_KEY }}
         run: npx tsx scripts/ingest.ts
 
-      - name: Publish events.json to data branch
+      - name: Publish events.json + sproutscout.ics to data branch
         run: |
           test -f events.json || { echo "::error::events.json was not produced"; exit 1; }
           echo "Scraped $(node -e "console.log(require('./events.json').count)" 2>/dev/null || echo '?') events"
           cp events.json /tmp/events.json
+          cp sproutscout.ics /tmp/sproutscout.ics 2>/dev/null || true
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          # Build a clean orphan branch that contains ONLY events.json.
+          # Build a clean orphan branch that contains ONLY the feed files.
           git checkout --orphan data
           git rm -r --cached . -q || true
           find . -mindepth 1 -maxdepth 1 ! -name '.git' -exec rm -rf {} + 2>/dev/null || true
           cp /tmp/events.json events.json
           git add -f events.json
-          git commit -m "data: update events.json [skip ci]"
+          if [ -f /tmp/sproutscout.ics ]; then cp /tmp/sproutscout.ics sproutscout.ics; git add -f sproutscout.ics; fi
+          git commit -m "data: update events feed [skip ci]"
           git push -f origin HEAD:data
-          echo "Published events.json to the data branch."
+          echo "Published feed files to the data branch."

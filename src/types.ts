@@ -20,6 +20,8 @@ export interface EventItem {
   venue: string;
   area: string;
   cat: EventCategory;
+  ages?: string; // "3-5", "all", or "" when unknown
+  weather?: { hi: number; pop: number; sym: string }; // outdoor events within the forecast window
   price: string;
   start: string; // ISO String (or date string)
   end?: string;  // Optional end ISO String

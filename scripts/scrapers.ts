@@ -117,7 +117,16 @@ async function harvestEventIcs(icsUrls: string[], fallbackUrl: string, area?: st
 
 // ---- CivicPlus / CivicEngage (Calendar.aspx) --------------------------------
 // Harvest EID links from the calendar page, then pull each event's iCal export.
-async function civicEngage(url: string, area?: string): Promise<any[]> {
+// Plain fetch first; if the page is bot-walled or JS-built, render it.
+async function fetchOrRender(listUrl: string, ctx: ScrapeContext, needle: RegExp): Promise<string | null> {
+  let html = await fetchText(listUrl);
+  if (html && needle.test(html)) return html;
+  const rendered = await ctx.renderWithCapture(listUrl);
+  if (rendered?.html) return rendered.html;
+  return html;
+}
+
+async function civicEngage(url: string, ctx: ScrapeContext, area?: string): Promise<any[]> {
   let origin: string;
   try {
     origin = new URL(url).origin;
@@ -125,24 +134,33 @@ async function civicEngage(url: string, area?: string): Promise<any[]> {
     return [];
   }
   const listUrl = /calendar\.aspx/i.test(url) ? url : `${origin}/calendar.aspx`;
-  const html = await fetchText(listUrl);
-  if (!html) return [];
-  const eids = [...new Set([...html.matchAll(/Calendar\.aspx\?EID=(\d+)/gi)].map((m) => m[1]))];
+  const eidRe = /Calendar\.aspx\?EID=(\d+)/gi;
+  const html = await fetchOrRender(listUrl, ctx, /Calendar\.aspx\?EID=\d+/i);
+  if (!html) {
+    console.log(`  civicengage ${origin}: list page unreachable`);
+    return [];
+  }
+  const eids = [...new Set([...html.matchAll(eidRe)].map((m) => m[1]))];
+  console.log(`  civicengage ${origin}: page ${html.length}b, ${eids.length} event ids`);
   const icsUrls = eids.map((id) => `${origin}/common/modules/iCalendar/iCalendar.aspx?EID=${id}&feed=calendar`);
   return harvestEventIcs(icsUrls, listUrl, area);
 }
 
 // ---- Granicus govAccess (/Home/Components/Calendar) ------------------------
-async function granicus(url: string, area?: string): Promise<any[]> {
+async function granicus(url: string, ctx: ScrapeContext, area?: string): Promise<any[]> {
   let origin: string;
   try {
     origin = new URL(url).origin;
   } catch {
     return [];
   }
-  const html = await fetchText(url);
-  if (!html) return [];
+  const html = await fetchOrRender(url, ctx, /\/Home\/Components\/Calendar\/Event\/\d+/i);
+  if (!html) {
+    console.log(`  granicus ${origin}: page unreachable`);
+    return [];
+  }
   const ids = [...new Set([...html.matchAll(/\/Home\/Components\/Calendar\/Event\/(\d+)/gi)].map((m) => m[1]))];
+  console.log(`  granicus ${origin}: page ${html.length}b, ${ids.length} event ids`);
   const icsUrls = ids.map((id) => `${origin}/Home/Components/Calendar/Event/ICalendar?ID=${id}&IsPublished=True`);
   return harvestEventIcs(icsUrls, url, area);
 }
@@ -222,15 +240,22 @@ function harvestEventbriteData(html: string, pageUrl: string): any[] {
 
 async function eventbrite(url: string, ctx: ScrapeContext): Promise<any[]> {
   const html = await fetchText(url);
+  console.log(`  eventbrite: plain fetch ${html ? `${html.length}b, server_data=${/__SERVER_DATA__/.test(html)}` : "failed"}`);
   if (html) {
     const out = harvestEventbriteData(html, url);
     if (out.length) return out;
   }
-  // Bot-walled or restructured: render and retry the same extraction.
+  // Bot-walled or restructured: render and retry the same extraction, and
+  // also harvest any JSON the page fetched for itself.
   const rendered = await ctx.renderWithCapture(url);
   if (rendered?.html) {
+    console.log(`  eventbrite: rendered ${rendered.html.length}b, server_data=${/__SERVER_DATA__/.test(rendered.html)}, jsonBlobs=${rendered.jsonBlobs.length}`);
     const out = harvestEventbriteData(rendered.html, url);
     if (out.length) return out;
+    for (const blob of rendered.jsonBlobs) {
+      const harvested = harvestEventObjects(blob, url);
+      if (harvested.length) return harvested;
+    }
   }
   return [];
 }
@@ -258,6 +283,7 @@ async function ticketleap(url: string): Promise<any[]> {
     .filter((l) => /\/(details|events?)\b/i.test(l) || /ticketleap\.com\/[a-z0-9-]+\/?$/i.test(l))
     .filter((l) => l.replace(/\/$/, "") !== url.replace(/\/$/, "")))];
   const out: any[] = [];
+  console.log(`  ticketleap: ${links.length} candidate event links`);
   for (const link of links.slice(0, 12)) {
     const page = await fetchText(link);
     if (!page) continue;
@@ -275,7 +301,7 @@ const VENUE_KEYS = ["branchName", "branch", "locationName", "location", "venueNa
 const URL_KEYS = ["url", "link", "eventUrl", "permalink", "canonicalUrl"];
 const DESC_KEYS = ["description", "summary", "excerpt", "shortDescription", "teaser"];
 
-function harvestEventObjects(root: any, pageUrl: string, defaults: { venue?: string; area?: string } = {}): any[] {
+export function harvestEventObjects(root: any, pageUrl: string, defaults: { venue?: string; area?: string } = {}): any[] {
   const out: any[] = [];
   const seen = new Set<any>();
   const asStr = (v: any): string => (typeof v === "string" ? v : v && typeof v === "object" && typeof v.name === "string" ? v.name : "");
@@ -346,7 +372,7 @@ async function spaCapture(url: string, ctx: ScrapeContext, defaults: { venue?: s
 
 // ---- Dispatcher --------------------------------------------------------------
 // Hosts where the WordPress Events Calendar REST API is worth probing first.
-const TRIBE_HOSTS = /(bishopranch\.com|walnutcreekdowntown\.com|visitconcordca\.com|moragaparks\.org|lafayettechamber\.org|510families\.com|lindsaywildlife\.org|claytonca\.gov)/i;
+const TRIBE_HOSTS = /(bishopranch\.com|walnutcreekdowntown\.com|visitconcordca\.com|moragaparks\.org|lafayettechamber\.org|510families\.com|lindsaywildlife\.org|claytonca\.gov|ruthbancroftgarden\.org|fairyland\.org|oaklandzoo\.org|lawrencehallofscience\.org|museumsrv\.org|blackhawkmuseum\.org|mdia\.org|rockinjump\.com)/i;
 const CIVICENGAGE_HOSTS = /(danville\.ca\.gov|cityofconcord\.org|phillca\.gov|pleasanthillrec\.com|moraga\.ca\.us|cityoforinda\.org|claytonca\.gov|contracosta\.ca\.gov)/i;
 const GRANICUS_HOSTS = /(walnutcreekca\.gov|walnutcreekartsrec\.org|lovelafayette\.org|cityofmartinez\.org|lesherartscenter\.org)/i;
 
@@ -363,11 +389,11 @@ export async function platformExtract(url: string, ctx: ScrapeContext): Promise<
       if (tribe.length) return tribe;
     }
     if (CIVICENGAGE_HOSTS.test(url)) {
-      const civ = await civicEngage(url);
+      const civ = await civicEngage(url, ctx);
       if (civ.length) return civ;
     }
     if (GRANICUS_HOSTS.test(url)) {
-      const gr = await granicus(url);
+      const gr = await granicus(url, ctx);
       if (gr.length) return gr;
     }
   } catch (err) {

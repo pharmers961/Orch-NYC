@@ -32,8 +32,13 @@ export function ActiveFilters({ filters, totalCategories }: { filters: Filters; 
   if (filters.searchQuery.trim())
     chips.push({ key: "q", label: `“${filters.searchQuery.trim()}”`, onRemove: () => filters.setSearchQuery("") });
 
-  if (filters.dateFilter !== "all")
-    chips.push({ key: "date", label: DATE_LABELS[filters.dateFilter], onRemove: () => filters.setDateFilter("all") });
+  // "This weekend" is the default view, so it isn't shown as a removable chip.
+  if (filters.dateFilter !== "all" && filters.dateFilter !== "weekend")
+    chips.push({ key: "date", label: DATE_LABELS[filters.dateFilter], onRemove: () => filters.setDateFilter("weekend") });
+
+  filters.selectedAges.forEach((a) =>
+    chips.push({ key: `a-${a}`, label: `Ages ${a}`, onRemove: () => filters.setSelectedAges((prev) => prev.filter((x) => x !== a)) })
+  );
 
   if (filters.savedOnly)
     chips.push({ key: "saved", label: "Saved only", onRemove: () => filters.setSavedOnly(false) });
