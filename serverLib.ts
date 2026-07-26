@@ -228,6 +228,7 @@ export function extractJsonLdEvents(html: string, sourceUrl: string): any[] {
       artist: performer?.name || "",
       venue,
       category: categorizeEvent(node.name, node.description || "", venue),
+      utc: true, // startDate was resolved to a UTC instant above
       date,
       time,
       price,
